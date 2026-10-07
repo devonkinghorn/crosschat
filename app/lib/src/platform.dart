@@ -29,8 +29,10 @@ class PlatformCapabilities {
       os: Platform.operatingSystem,
       canExtractAppleHardwareKey: Platform.isMacOS,
       hasPersistentSyncService: Platform.isAndroid,
-      // webview_flutter covers Android/iOS/macOS; Linux/Windows need another plugin.
-      hasEmbeddedWebview: Platform.isAndroid || Platform.isIOS || Platform.isMacOS,
+      // Embedded sign-in window (lib/src/webauth): WKWebView on macOS,
+      // WebKitGTK on Linux when the system has it (checked at runtime by
+      // WebAuthLauncher.isAvailable). Android: not yet (paste fallback).
+      hasEmbeddedWebview: Platform.isMacOS || Platform.isLinux,
       isMobile: Platform.isAndroid || Platform.isIOS,
     );
   }

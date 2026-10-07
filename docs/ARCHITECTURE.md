@@ -142,7 +142,12 @@ All four ran live under `crosschatd` on Linux in the alpha's smoke test, and eac
 - **Generic bridgev2 login renderer** ✅ covers every bridgev2 bridge with one component:
   - `user_input`: text, phone, password, token, select. `hardware_key` gets an "Extract from this Mac" button on macOS.
   - `display_and_wait`: QR (`qr_flutter`), pairing code, emoji, then a long-poll for the next step.
-  - `cookies`: current bridgev2 `fields[].sources[]` shape (and the legacy `type`/`name` shape). Alpha: open the URL in a browser, then paste a cURL command, Cookie header, or JSON to fill the fields. 📋 An embedded, fresh, private webview that captures cookies automatically (`webview_flutter` on Android/iOS/macOS; Linux/Windows need another plugin).
+  - `cookies`: current bridgev2 `fields[].sources[]` shape (and the legacy `type`/`name` shape). ✅ **Embedded sign-in window** (`lib/src/webauth/`, modeled on [mautrix-manager](https://github.com/mautrix/manager)'s `webview.ts`): the dialog opens a native window on `cookies.url` with a fresh, non-persistent cookie store per login (discarded on close) and keeps the user on the sign-in site (link clicks to other sites and app hand-offs like `slack://` are blocked; redirects and SSO form posts are allowed; pop-ups load in place). Dart polls the native cookie store (HttpOnly cookies included) and collects every source type: `cookie` (+`cookie_domain`, URL-decoded), `local_storage`, `request_header`/`request_body` (fetch/XHR hook injected at document start, matched by `request_url_regex`) and `special` (filled by the step's `extract_js`, run after each load). Values must match the field `pattern`. When every required field is in (and `wait_for_url_pattern` matches, if given) the window closes and the values are submitted, so Google Messages goes straight to the emoji step. Closing the window early offers to reopen it; if all required values were already captured it submits anyway, as bridgev2 allows. `user_agent` is honored; otherwise macOS uses Safari's exact UA (installed Safari version) so Google doesn't reject the window as an insecure browser.
+    - macOS: `macos/Runner/WebAuthWindow.swift` (WKWebView, `WKWebsiteDataStore.nonPersistent()`, `WKHTTPCookieStore`).
+    - Linux: `linux/runner/web_auth.cc` loads WebKitGTK 4.1 with `dlopen` (ephemeral `WebKitWebContext`), so the app neither builds against nor requires it. Without it the dialog shows the paste flow.
+    - Android: 📋 not yet (WebView dialog with the `; wv` UA marker stripped), so the paste flow is shown.
+    - Fallback everywhere: **Advanced: paste cookies** (open the URL in a browser, paste a cURL command, Cookie header or JSON).
+    - `integration_test/web_auth_test.dart` opens Google's and Slack's sign-in pages in the real window and checks they load and aren't blocked (no credentials entered).
   - `complete`.
 - **Capability flags** ✅ (`PlatformCapabilities`): `canExtractAppleHardwareKey` (macOS), `hasPersistentSyncService` (Android), `hasEmbeddedWebview`, `isMobile`. Manifest `requirements.provided_by` is matched against the current platform.
 - **Backends.** `FfiBackend` (Rust core) by default. `DemoBackend` (sample data) runs with `CROSSCHAT_DEMO=1` or `--dart-define=CROSSCHAT_DEMO=true`, and is used when the native library fails to load.
@@ -168,14 +173,14 @@ All four ran live under `crosschatd` on Linux in the alpha's smoke test, and eac
 - **Bridge-host decryption.** See §8. It's unavoidable with bridges, and must be communicated clearly in onboarding.
 - **Account bans and ToS.** Apple, Google, Slack, and GroupMe can flag or ban unofficial clients. iMessage via corten-matrix and Google Messages via cookies are the most fragile. The app shows maturity badges and preflight warnings.
 - **Maintenance churn.** Upstream bridges, Google's cookie rotation, Apple's protocol changes, matrix-rust-sdk pre-1.0 APIs, and the bridgev2 provisioning API all move. Mitigation: pinned versions, a manifest per bridge, the end-to-end smoke test in CI-like scripts, and our facade crate as the only Rust API Dart sees.
-- **Onboarding.** ✅ No homeserver needed to start: the local server on this computer. Still hard for a real server: reverse proxy, server name, federation choice. Plus a Mac for the iMessage key and cookie copy-paste on Linux. A real-server wizard, local-to-real migration and embedded webview logins are the biggest UX gaps 📋.
+- **Onboarding.** ✅ No homeserver needed to start: the local server on this computer. Still hard for a real server: reverse proxy, server name, federation choice. Plus a Mac for the iMessage key. A real-server wizard and local-to-real migration are the biggest UX gaps 📋.
 - **GroupMe** has no upstream releases and is early. iMessage has no published checksums.
 - **Threads.** There is no standard "also send to channel" yet, and there is no cross-room thread inbox in the alpha.
 
 ## 11. Roadmap
 1. **Alpha (this repo):** core, daemon, 4 manifests, Flutter UI, end-to-end smoke test, CI.
 2. **Daily-drivable:** E2EE verification and recovery, media, reactions, read receipts, sliding sync, keychain storage, room list performance.
-3. **Logins without a terminal:** embedded cookie webview, real-account testing of all four networks, a bridge health screen, logout and relogin.
+3. **Logins without a terminal:** real-account testing of all four networks, the sign-in window on Android, a bridge health screen, logout and relogin.
 4. **Setup wizard:** ✅ local server on this computer (owner bootstrap, server_name lock-in warning). 📋 Real-server flow (server name, federation choice), migrating a local server to a real domain ([#1](https://github.com/devonkinghorn/crosschat/issues/1)), reverse proxy recipes, Docker image.
 5. **Mobile:** sync loop in the Android service, iOS build, then the paid push tier and relay.
 6. **More networks:** WhatsApp, Signal, Telegram.

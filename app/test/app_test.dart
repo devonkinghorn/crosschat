@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:crosschat/main.dart';
@@ -6,6 +7,8 @@ import 'package:crosschat/src/platform.dart';
 import 'package:crosschat/src/state/app_state.dart';
 import 'package:crosschat/src/ui/bridge_login_dialog.dart';
 import 'package:crosschat/src/ui/message_list.dart';
+import 'package:crosschat/src/webauth/cookie_login.dart';
+import 'package:crosschat/src/webauth/web_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -60,7 +63,14 @@ MockClient fakeDaemon(List<http.Request> seen) => MockClient((req) async {
     return http.Response(
       jsonEncode({
         'results': [
-          {'bridge': 'gmessages', 'network': 'gmessages', 'id': '+15551234567', 'name': 'Jess Climber', 'identifiers': ['+15551234567'], 'dm_room_mxid': '!climb:gmessages'},
+          {
+            'bridge': 'gmessages',
+            'network': 'gmessages',
+            'id': '+15551234567',
+            'name': 'Jess Climber',
+            'identifiers': ['+15551234567'],
+            'dm_room_mxid': '!climb:gmessages',
+          },
         ],
         'errors': {},
       }),
@@ -113,6 +123,28 @@ MockClient fakeDaemon(List<http.Request> seen) => MockClient((req) async {
   }
   return http.Response('{"errcode":"M_NOT_FOUND"}', 404);
 });
+
+/// Stands in for the native sign-in window.
+class FakeWebAuth implements WebAuthLauncher {
+  final runs = <CookieLoginSpec>[];
+  Completer<Map<String, String>>? pending;
+  bool cancelled = false;
+
+  @override
+  Future<bool> isAvailable() async => true;
+
+  @override
+  Future<Map<String, String>> run(CookieLoginSpec spec, {String? title}) {
+    runs.add(spec);
+    return (pending = Completer<Map<String, String>>()).future;
+  }
+
+  @override
+  Future<void> cancel() async {
+    cancelled = true;
+    pending?.completeError(const WebAuthCancelled());
+  }
+}
 
 Future<AppState> pumpApp(WidgetTester tester, {Size size = const Size(1600, 900), PlatformCapabilities caps = desktop, http.Client? daemon}) async {
   tester.view.physicalSize = size;
@@ -265,6 +297,83 @@ void main() {
     final step = seen.lastWhere((r) => r.url.path.contains('/login/step/'));
     expect(jsonDecode(step.body), {'SID': 'abc'});
     expect(find.textContaining('Connected!'), findsOneWidget);
+  });
+
+  testWidgets('cookies step opens the sign-in window and submits what it captures', (tester) async {
+    final fake = FakeWebAuth();
+    final previous = webAuthLauncher;
+    webAuthLauncher = fake;
+    addTearDown(() => webAuthLauncher = previous);
+    final seen = <http.Request>[];
+    await pumpApp(tester, daemon: fakeDaemon(seen));
+    await login(tester);
+    await tester.tap(find.byKey(const Key('open-settings')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, 'Connect').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Google account'));
+    await tester.pump();
+    await tester.pump();
+
+    // Opened by itself, like Beeper; the paste UI is tucked away.
+    expect(fake.runs, hasLength(1));
+    expect(fake.runs.single.url, 'https://accounts.google.com/AccountChooser');
+    expect(find.byKey(const Key('webauth-waiting')), findsOneWidget);
+    expect(find.textContaining('in the window that just opened'), findsOneWidget);
+    expect(find.text('Advanced: paste cookies'), findsOneWidget);
+    expect(find.byKey(const Key('cookie-paste')), findsNothing);
+    expect(find.text('Enter a JSON object with your cookies.'), findsNothing);
+
+    // The user closes the window early: offer to reopen it.
+    fake.pending!.completeError(const WebAuthCancelled());
+    await tester.pumpAndSettle();
+    expect(find.textContaining('closed before you finished'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('webauth-open')));
+    await tester.pump();
+    expect(fake.runs, hasLength(2));
+
+    // Sign-in finished: cookies go to the bridge automatically.
+    fake.pending!.complete({'SID': 'from-window', '__Secure-1PSIDTS': 'ts'});
+    await tester.pumpAndSettle();
+    final step = seen.lastWhere((r) => r.url.path.contains('/login/step/'));
+    expect(jsonDecode(step.body), {'SID': 'from-window', '__Secure-1PSIDTS': 'ts'});
+    expect(find.textContaining('Connected!'), findsOneWidget);
+  });
+
+  testWidgets('advanced paste stays available next to the sign-in window', (tester) async {
+    final fake = FakeWebAuth();
+    final previous = webAuthLauncher;
+    webAuthLauncher = fake;
+    addTearDown(() => webAuthLauncher = previous);
+    final seen = <http.Request>[];
+    await pumpApp(tester, daemon: fakeDaemon(seen));
+    await login(tester);
+    await tester.tap(find.byKey(const Key('open-settings')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, 'Connect').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Google account'));
+    await tester.pump();
+    await tester.pump();
+    await tester.tap(find.text('Advanced: paste cookies'));
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 1));
+    expect(find.text('Enter a JSON object with your cookies.'), findsOneWidget);
+    await tester.ensureVisible(find.byKey(const Key('cookie-paste')));
+    await tester.enterText(find.byKey(const Key('cookie-paste')), 'SID=pasted');
+    await tester.ensureVisible(find.text('Fill from paste'));
+    await tester.pump();
+    await tester.tap(find.text('Fill from paste'));
+    await tester.pump();
+    final submit = find.widgetWithText(FilledButton, 'Submit');
+    await tester.ensureVisible(submit);
+    await tester.tap(submit);
+    await tester.pumpAndSettle();
+    expect(jsonDecode(seen.lastWhere((r) => r.url.path.contains('/login/step/')).body), {'SID': 'pasted'});
+    expect(find.textContaining('Connected!'), findsOneWidget);
+    // Leaving the step closes the window that was still open.
+    expect(fake.runs, hasLength(1));
+    expect(fake.cancelled, isTrue);
   });
 
   test('cookie paste parser', () {

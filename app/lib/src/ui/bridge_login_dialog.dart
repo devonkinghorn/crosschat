@@ -8,6 +8,8 @@ import 'package:url_launcher/url_launcher.dart';
 import '../daemon/daemon_client.dart';
 import '../platform.dart';
 import '../state/app_state.dart';
+import '../webauth/cookie_login.dart';
+import '../webauth/web_auth.dart';
 import 'networks.dart';
 import 'theme.dart';
 
@@ -16,7 +18,9 @@ import 'theme.dart';
 /// Google Messages, Slack and GroupMe:
 ///   * user_input       → form fields (phone, password, 2FA, select, ...)
 ///   * display_and_wait → QR / pairing code / emoji, then long-poll
-///   * cookies          → sign-in page whose cookies are handed to the bridge
+///   * cookies          → embedded sign-in window (fresh private webview) whose
+///                        cookies/tokens are captured and handed to the bridge;
+///                        pasting cookies stays available under "Advanced"
 ///   * complete         → done
 class BridgeLoginDialog extends StatefulWidget {
   const BridgeLoginDialog({super.key, required this.state, required this.bridge});
@@ -34,6 +38,11 @@ class _BridgeLoginDialogState extends State<BridgeLoginDialog> {
   bool _busy = false;
   final Map<String, TextEditingController> _fields = {};
 
+  /// Embedded sign-in window: available on this device, and currently open.
+  bool _webAuthOk = false;
+  bool _webAuthOpen = false;
+  String? _webAuthNote;
+
   DaemonClient get _d => widget.state.daemon!;
   PlatformCapabilities get _caps => widget.state.capabilities;
   String get _bridgeId => widget.bridge.id;
@@ -42,10 +51,16 @@ class _BridgeLoginDialogState extends State<BridgeLoginDialog> {
   void initState() {
     super.initState();
     _loadFlows();
+    webAuthLauncher.isAvailable().then((ok) {
+      if (mounted) setState(() => _webAuthOk = ok);
+      final step = _step;
+      if (ok && step != null && step['type'] == 'cookies' && mounted) _runWebAuth(step);
+    });
   }
 
   @override
   void dispose() {
+    if (_webAuthOpen) webAuthLauncher.cancel().ignore();
     final step = _step;
     if (step != null && step['type'] != 'complete' && step['login_id'] != null) {
       _d.cancelLogin(_bridgeId, step['login_id'] as String).ignore();
@@ -78,14 +93,55 @@ class _BridgeLoginDialogState extends State<BridgeLoginDialog> {
   });
 
   void _setStep(Map<String, dynamic> step) {
+    if (_webAuthOpen) {
+      // Moved on another way (e.g. pasted cookies): close the window.
+      _webAuthOpen = false;
+      webAuthLauncher.cancel().ignore();
+    }
     _step = step;
     for (final c in _fields.values) {
       c.dispose();
     }
     _fields.clear();
+    _webAuthNote = null;
     if (step['type'] == 'display_and_wait') {
       // Nothing to collect: immediately wait for the user to act on their phone.
       Future.microtask(() => _submit({}));
+    } else if (step['type'] == 'cookies' && _webAuthOk) {
+      // Like Beeper: the sign-in window opens by itself.
+      Future.microtask(() => _runWebAuth(step));
+    }
+  }
+
+  /// Opens the sign-in window for a `cookies` step and submits what it
+  /// captures; the next step (e.g. the emoji to tap on the phone) follows.
+  Future<void> _runWebAuth(Map<String, dynamic> step) async {
+    if (_webAuthOpen) return;
+    final spec = CookieLoginSpec.fromStep((step['cookies'] as Map).cast<String, dynamic>());
+    setState(() {
+      _webAuthOpen = true;
+      _webAuthNote = null;
+      _error = null;
+    });
+    try {
+      final values = await webAuthLauncher.run(spec, title: 'Sign in to ${widget.bridge.displayName}');
+      if (!mounted || !identical(_step, step)) return;
+      setState(() => _webAuthOpen = false);
+      await _submit(values);
+    } on WebAuthCancelled {
+      if (mounted && identical(_step, step)) {
+        setState(() {
+          _webAuthOpen = false;
+          _webAuthNote = 'The sign-in window was closed before you finished. Open it again to continue.';
+        });
+      }
+    } catch (e) {
+      if (mounted && identical(_step, step)) {
+        setState(() {
+          _webAuthOpen = false;
+          _webAuthNote = '$e';
+        });
+      }
     }
   }
 
@@ -94,8 +150,7 @@ class _BridgeLoginDialogState extends State<BridgeLoginDialog> {
     if (mounted) setState(() => _setStep(next));
   });
 
-  TextEditingController _ctrl(String id, [String? initial]) =>
-      _fields.putIfAbsent(id, () => TextEditingController(text: initial ?? ''));
+  TextEditingController _ctrl(String id, [String? initial]) => _fields.putIfAbsent(id, () => TextEditingController(text: initial ?? ''));
 
   Future<void> _extractHardwareKey(TextEditingController target) => _guard(() async {
     final path = widget.state.settings.extractorPath;
@@ -120,7 +175,9 @@ class _BridgeLoginDialogState extends State<BridgeLoginDialog> {
                   children: [
                     Icon(style.icon, color: style.color),
                     const SizedBox(width: 8),
-                    Flexible(child: Text('Connect ${widget.bridge.displayName}', style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w700))),
+                    Flexible(
+                      child: Text('Connect ${widget.bridge.displayName}', style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w700)),
+                    ),
                   ],
                 ),
                 const SizedBox(height: 12),
@@ -128,9 +185,16 @@ class _BridgeLoginDialogState extends State<BridgeLoginDialog> {
                 for (final r in widget.bridge.requirements) _requirement(r),
                 const SizedBox(height: 8),
                 _body(),
-                if (_error != null) Padding(padding: const EdgeInsets.only(top: 12), child: Text(_error!, style: const TextStyle(color: CC.danger))),
+                if (_error != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 12),
+                    child: Text(_error!, style: const TextStyle(color: CC.danger)),
+                  ),
                 const SizedBox(height: 12),
-                Align(alignment: Alignment.centerRight, child: TextButton(onPressed: () => Navigator.pop(context), child: const Text('Close'))),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: TextButton(onPressed: () => Navigator.pop(context), child: const Text('Close')),
+                ),
               ],
             ),
           ),
@@ -163,16 +227,18 @@ class _BridgeLoginDialogState extends State<BridgeLoginDialog> {
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
       child: Text(
-        canProvide
-            ? '✓ ${r['description']} This device can provide it.'
-            : '${r['description']} Available from: ${providers.join(', ')}.',
+        canProvide ? '✓ ${r['description']} This device can provide it.' : '${r['description']} Available from: ${providers.join(', ')}.',
         style: const TextStyle(fontSize: 12.5, color: CC.textMuted),
       ),
     );
   }
 
   Widget _body() {
-    if (_busy && _step == null) return const Center(child: Padding(padding: EdgeInsets.all(16), child: CircularProgressIndicator()));
+    if (_busy && _step == null) {
+      return const Center(
+        child: Padding(padding: EdgeInsets.all(16), child: CircularProgressIndicator()),
+      );
+    }
     final step = _step;
     if (step == null) {
       final flows = _flows ?? [];
@@ -198,7 +264,9 @@ class _BridgeLoginDialogState extends State<BridgeLoginDialog> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        if (instructions != null && instructions.isNotEmpty)
+        // A cookies step's instructions describe pasting; with the sign-in
+        // window they only appear under "Advanced".
+        if (instructions != null && instructions.isNotEmpty && !(step['type'] == 'cookies' && _webAuthOk))
           Padding(padding: const EdgeInsets.only(bottom: 12), child: Text(instructions)),
         switch (step['type']) {
           'user_input' => _userInput(step['user_input'] as Map<String, dynamic>),
@@ -220,7 +288,10 @@ class _BridgeLoginDialogState extends State<BridgeLoginDialog> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         for (final f in fields) ...[
-          Text(f['name'] as String? ?? f['id'] as String, style: const TextStyle(color: CC.textMuted, fontSize: 12, fontWeight: FontWeight.w600)),
+          Text(
+            f['name'] as String? ?? f['id'] as String,
+            style: const TextStyle(color: CC.textMuted, fontSize: 12, fontWeight: FontWeight.w600),
+          ),
           const SizedBox(height: 4),
           if (f['type'] == 'select')
             DropdownButtonFormField<String>(
@@ -246,7 +317,10 @@ class _BridgeLoginDialogState extends State<BridgeLoginDialog> {
                     )
                   : const Padding(
                       padding: EdgeInsets.only(top: 4),
-                      child: Text('Extract this key once with the Crosschat macOS app, then paste it here.', style: TextStyle(color: CC.textFaint, fontSize: 12)),
+                      child: Text(
+                        'Extract this key once with the Crosschat macOS app, then paste it here.',
+                        style: TextStyle(color: CC.textFaint, fontSize: 12),
+                      ),
                     ),
             ),
           const SizedBox(height: 12),
@@ -267,7 +341,11 @@ class _BridgeLoginDialogState extends State<BridgeLoginDialog> {
         padding: const EdgeInsets.all(12),
         child: QrImageView(data: data, size: 240),
       ),
-      'code' => SelectableText(data, textAlign: TextAlign.center, style: const TextStyle(fontSize: 32, letterSpacing: 4, fontWeight: FontWeight.w700)),
+      'code' => SelectableText(
+        data,
+        textAlign: TextAlign.center,
+        style: const TextStyle(fontSize: 32, letterSpacing: 4, fontWeight: FontWeight.w700),
+      ),
       'emoji' => Text(data, textAlign: TextAlign.center, style: const TextStyle(fontSize: 72)),
       _ => const SizedBox.shrink(),
     };
@@ -327,23 +405,93 @@ class _BridgeLoginDialogState extends State<BridgeLoginDialog> {
   }
 
   Widget _cookies(Map<String, dynamic> p) {
+    if (!_webAuthOk) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Text(
+            'This device can\'t open the sign-in window, so sign in in your browser and paste the values below.',
+            style: TextStyle(color: CC.textMuted, fontSize: 12.5),
+          ),
+          const SizedBox(height: 8),
+          _pasteCookies(p),
+        ],
+      );
+    }
+    final spec = CookieLoginSpec.fromStep(p);
+    final instructions = _step?['instructions'] as String?;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (_webAuthOpen || (_busy && _webAuthNote == null))
+          Row(
+            key: const Key('webauth-waiting'),
+            children: [
+              const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  _webAuthOpen
+                      ? 'Sign in to ${spec.displayHost} in the window that just opened. It closes by itself when you\'re done.'
+                      : 'Signed in. Connecting…',
+                ),
+              ),
+            ],
+          )
+        else ...[
+          Text(
+            _webAuthNote ?? 'Sign in to ${spec.displayHost} in a private sign-in window. Crosschat only keeps what the bridge needs.',
+            style: TextStyle(color: _webAuthNote == null ? CC.textMuted : CC.warning, fontSize: 12.5),
+          ),
+          const SizedBox(height: 10),
+          FilledButton.icon(
+            key: const Key('webauth-open'),
+            icon: const Icon(Icons.login),
+            label: Text('Sign in with ${spec.displayHost}'),
+            onPressed: _busy || _step == null ? null : () => _runWebAuth(_step!),
+          ),
+        ],
+        const SizedBox(height: 12),
+        Theme(
+          data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+          child: ExpansionTile(
+            key: const Key('cookie-advanced'),
+            tilePadding: EdgeInsets.zero,
+            childrenPadding: EdgeInsets.zero,
+            title: const Text('Advanced: paste cookies', style: TextStyle(color: CC.textMuted, fontSize: 12.5)),
+            children: [
+              if (instructions != null && instructions.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Text(instructions, style: const TextStyle(fontSize: 12.5)),
+                ),
+              _pasteCookies(p),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// Manual fallback: open the page in a browser, paste a cURL command /
+  /// Cookie header / JSON, or type the values.
+  Widget _pasteCookies(Map<String, dynamic> p) {
     final url = p['url'] as String? ?? '';
     final fields = ((p['fields'] as List?) ?? []).cast<Map<String, dynamic>>();
     final paste = _ctrl('__paste__');
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Text(
-          _caps.hasEmbeddedWebview
-              ? 'Embedded sign-in (fresh private webview with cookie capture) is the next milestone. For now, sign in in your browser and paste the values below.'
-              : 'Sign in in your browser, then paste the requested values below (embedded sign-in on Linux/Windows needs a webview plugin; tracked in the roadmap).',
-          style: const TextStyle(color: CC.textMuted, fontSize: 12.5),
-        ),
-        const SizedBox(height: 8),
         Row(
           children: [
-            Expanded(child: SelectableText(url, style: const TextStyle(color: CC.link, fontSize: 12))),
-            IconButton(tooltip: 'Copy URL', icon: const Icon(Icons.copy, size: 18), onPressed: () => Clipboard.setData(ClipboardData(text: url))),
+            Expanded(
+              child: SelectableText(url, style: const TextStyle(color: CC.link, fontSize: 12)),
+            ),
+            IconButton(
+              tooltip: 'Copy URL',
+              icon: const Icon(Icons.copy, size: 18),
+              onPressed: () => Clipboard.setData(ClipboardData(text: url)),
+            ),
             IconButton(tooltip: 'Open in browser', icon: const Icon(Icons.open_in_new, size: 18), onPressed: () => launchUrl(Uri.parse(url))),
           ],
         ),
@@ -394,7 +542,8 @@ Map<String, String> parseCookiePaste(String text) {
     } catch (_) {}
   }
   String header = t;
-  final m = RegExp(r"""(?:-H|--header)\s+(['"])cookie:\s*(.*?)\1""", caseSensitive: false).firstMatch(t) ??
+  final m =
+      RegExp(r"""(?:-H|--header)\s+(['"])cookie:\s*(.*?)\1""", caseSensitive: false).firstMatch(t) ??
       RegExp(r"""(?:-b|--cookie)\s+(['"])(.*?)\1""").firstMatch(t);
   if (m != null) {
     header = m.group(2)!;

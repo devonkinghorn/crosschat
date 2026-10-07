@@ -21,12 +21,12 @@ Crosschat is a Slack/Discord-style chat app that puts iMessage, RCS/SMS (Google 
 | **Provisioning proxy** | `/_crosschat/v1/...`, authenticated with your Matrix token: the bridgev2 provisioning API for in-app logins, plus a **cross-network contact search** fan-out (`search_users` + `resolve_identifier`). |
 | **Bridges** | Manifests for **iMessage** ([corten-matrix](https://github.com/lrhodin/corten-matrix)), **Google Messages** ([mautrix-gmessages](https://github.com/mautrix/gmessages)), **Slack** ([mautrix-slack](https://github.com/mautrix/slack)) and **GroupMe** ([beeper/groupme](https://github.com/beeper/groupme), early). All four ran live under `crosschatd` on Linux and returned their real login flows through the proxy. |
 | **First-run setup** | **No homeserver needed:** the desktop app (macOS, Linux) offers *Start a new server on this computer* (default) or *Use an existing Matrix server*. The first starts `crosschatd local` with a bundled Tuwunel on `localhost`, creates your owner account and signs you in; later launches reuse it. Plug and play: no Go, Rust, Xcode or compiler needed. Tuwunel and the default bridges ship inside the app (or are downloaded prebuilt). |
-| **App** (`app/`) | Network rail, chat sidebar, dense message list, composer, **Slack-style thread side panel** (pushed routes on phones), and a new-chat dialog that searches bridges through crosschatd and falls back to Matrix users. **Generic bridgev2 login renderer**: forms, QR, code, emoji, cookies via paste, complete. Settings with the bridge list and the **Android "keep connection open"** foreground-service toggle. Capability flags such as macOS-only iMessage key extraction. Demo mode. |
+| **App** (`app/`) | Network rail, chat sidebar, dense message list, composer, **Slack-style thread side panel** (pushed routes on phones), and a new-chat dialog that searches bridges through crosschatd and falls back to Matrix users. **Generic bridgev2 login renderer**: forms, QR, code, emoji, **cookies via an embedded sign-in window** (paste as a fallback), complete. Settings with the bridge list and the **Android "keep connection open"** foreground-service toggle. Capability flags such as macOS-only iMessage key extraction. Demo mode. |
 | **Tests** | 65 daemon tests (unit, HTTP proxy against a fake bridge, local-mode owner bootstrap against a fake homeserver), 9 core unit tests, 26 Flutter tests, an **end-to-end smoke test** against a real local Tuwunel with a real bridge (`scripts/smoke.sh`), and a **desktop integration test** of the whole new-server flow (`app/integration_test/`). |
 
 ## What doesn't work yet
 
-- **No real-account logins have been tried.** Cookie logins (Google, Slack) use copy-paste on desktop: open the sign-in page, then paste a cURL command, Cookie header or JSON. There is no embedded webview capture yet.
+- **No real-account logins have been tried.** Cookie logins (Google, Slack) open a private sign-in window (macOS: WKWebView; Linux: WebKitGTK 4.1 if installed). Sign in there and it closes by itself; for Google Messages you then tap the matching emoji on your phone. Where the window isn't available (Android for now, or Linux without `libwebkit2gtk-4.1-0`), and under **Advanced: paste cookies** everywhere, you can still paste a cURL command, Cookie header or JSON.
 - The **iMessage hardware-key extractor** button calls the upstream CLI on macOS, but it is untested: there's no Mac in CI.
 - No E2EE verification or recovery UI. No media, reactions, read receipts, typing or rich-text rendering (messages show their plain `body`).
 - Classic `/sync` only, no sliding sync yet. No encrypted store or keychain: `session.json` is saved with mode 0600.
@@ -244,7 +244,7 @@ CI covers Rust fmt/clippy/test, the end-to-end smoke test, Flutter analyze/test,
 ## Roadmap
 
 1. **Daily-drivable:** E2EE verification and recovery, media, reactions, receipts, rich text, sliding sync, keychain storage.
-2. **Logins without a terminal:** an embedded cookie webview, real-account testing of all four networks, a health screen.
+2. **Logins without a terminal:** real-account testing of all four networks, the sign-in window on Android, a health screen.
 3. **Real-server setup:** ✅ local server on this computer. Next: a wizard for a real server (server name, federation choice), migrating a local server to a real domain ([#1](https://github.com/devonkinghorn/crosschat/issues/1)), a Docker image, reverse-proxy recipes.
 4. **Mobile:** sync loop inside the Android service, iOS, then an optional paid push tier and a ~$1/mo TLS-passthrough relay. The relay is documented only.
 5. **More networks:** WhatsApp, Signal, Telegram.
