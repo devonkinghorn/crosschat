@@ -1,0 +1,22 @@
+PODS:
+  - crosschat_ffi (0.0.1):
+    - FlutterMacOS
+  - FlutterMacOS (1.0.0)
+
+DEPENDENCIES:
+  - crosschat_ffi (from `Flutter/ephemeral/.symlinks/plugins/crosschat_ffi/macos`)
+  - FlutterMacOS (from `Flutter/ephemeral`)
+
+EXTERNAL SOURCES:
+  crosschat_ffi:
+    :path: Flutter/ephemeral/.symlinks/plugins/crosschat_ffi/macos
+  FlutterMacOS:
+    :path: Flutter/ephemeral
+
+SPEC CHECKSUMS:
+  crosschat_ffi: 1244bff1bc84f45d68b2770f89feeca7a8e7979f
+  FlutterMacOS: c232990155153907050900a2e175c7773903ba4e
+
+PODFILE CHECKSUM: 1e95c36afbfd1cb6423ceca4de7a8e1b256fb6ac
+
+COCOAPODS: 1.16.2
