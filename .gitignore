@@ -8,3 +8,4 @@ session.json
 .env
 /smoke/
 /smoke*/
+/dist/

@@ -5,6 +5,13 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      prebuilt_tag:
+        description: >-
+          Build the prebuilt binaries (scripts/build-prebuilt.sh) and attach
+          them to this pre-release tag, e.g. prebuilt-v2. Empty = normal CI.
+        required: false
+        default: ""
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -121,9 +128,75 @@ jobs:
           cache: true
       - working-directory: app
         run: flutter build macos --release
+      - name: Bundle crosschatd, Tuwunel and default bridges (prebuilt, no compiling)
+        run: scripts/bundle-local-server.sh
       - name: Zip unsigned app
         run: ditto -c -k --sequesterRsrc --keepParent app/build/macos/Build/Products/Release/crosschat.app crosschat-macos-unsigned.zip
       - uses: actions/upload-artifact@v4
         with:
           name: crosschat-macos-unsigned
           path: crosschat-macos-unsigned.zip
+
+  # ---- Prebuilt binaries for the prebuilt-vN release (manual) ----
+  # Users never compile: crosschatd downloads these (SHA-256 pinned in
+  # manifests/*.yaml and tuwunel.rs) and the macOS app bundles the default ones.
+
+  prebuilt-macos:
+    name: Prebuilt (macOS bridges + Tuwunel)
+    if: github.event_name == 'workflow_dispatch' && inputs.prebuilt_tag != ''
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.27.x"
+          cache: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - run: scripts/build-prebuilt.sh --no-package --out dist/prebuilt darwin-arm64 darwin-amd64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: prebuilt-darwin
+          path: dist/prebuilt/[mt]*
+
+  prebuilt-linux:
+    name: Prebuilt (Linux bridges without upstream releases)
+    if: github.event_name == 'workflow_dispatch' && inputs.prebuilt_tag != ''
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.27.x"
+          cache: false
+      - uses: mlugg/setup-zig@v2
+      - run: scripts/build-prebuilt.sh --bridges --no-package --out dist/prebuilt linux-amd64 linux-arm64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: prebuilt-linux
+          path: dist/prebuilt/[mt]*
+
+  prebuilt-release:
+    name: Prebuilt (package + attach to pre-release)
+    needs: [prebuilt-macos, prebuilt-linux]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist/prebuilt
+          merge-multiple: true
+      - run: scripts/build-prebuilt.sh --package --out dist/prebuilt
+      - name: Compare with the pins in the repo
+        run: diff prebuilt/SHA256SUMS dist/prebuilt/SHA256SUMS || echo "::warning::hashes differ from prebuilt/SHA256SUMS; update the manifests if you publish these"
+      - name: Attach to the pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.prebuilt_tag }}
+        run: |
+          gh release view "$TAG" >/dev/null 2>&1 || \
+            gh release create "$TAG" --prerelease --title "Prebuilt binaries ($TAG)" --notes-file prebuilt/RELEASE_NOTES.md
+          gh release upload "$TAG" --clobber dist/prebuilt/*.zst dist/prebuilt/SHA256SUMS
