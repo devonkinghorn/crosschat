@@ -1,0 +1,45 @@
+# crosschatd example configuration.
+# Relative paths are resolved against this file's directory.
+
+# HTTP API (control API + provisioning proxy). Expose it on your homeserver's
+# domain at /_crosschat/ via your reverse proxy; bridges stay on loopback.
+listen = "127.0.0.1:29300"
+data_dir = "data"
+manifests_dir = "../manifests"
+
+[homeserver]
+# Client-server URL reachable from this host (bridges use it too).
+url = "http://127.0.0.1:6167"
+server_name = "example.com"
+
+# How appservice registrations reach the homeserver:
+#   { kind = "manual" }                      -> files in data/registrations + printed instructions
+#   { kind = "directory", path = "/etc/tuwunel/appservices" }  -> Tuwunel appservice_dir
+registration = { kind = "manual" }
+
+# Uncomment to have crosschatd run a bundled Tuwunel homeserver.
+# federation MUST be chosen explicitly (false = private, true = federated);
+# server_name cannot be changed later without wiping the database.
+# [homeserver.bundled]
+# implementation = "tuwunel"
+# binary = "/usr/local/bin/tuwunel"
+# port = 6167
+# federation = false
+# allow_registration = true   # owner bootstrap with the vault registration token; turn off afterwards
+
+[auth]
+# Who may manage bridges and use the provisioning proxy.
+admins = ["@devon:example.com"]
+allow_server_users = false
+
+[bridges.imessage]
+enabled = false
+
+[bridges.gmessages]
+enabled = true
+
+[bridges.slack]
+enabled = true
+
+[bridges.groupme]
+enabled = false

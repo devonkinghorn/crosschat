@@ -1,0 +1,9 @@
+/target/
+**/target/
+/data/
+deploy/data/
+*.token
+vault.json
+session.json
+.env
+/smoke/

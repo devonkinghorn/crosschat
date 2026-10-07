@@ -1,0 +1,63 @@
+# Slack via mautrix-slack (AGPL-3.0, downloaded at install time).
+schema: crosschat.bridge/v1
+id: slack
+display_name: Slack
+network: slack
+description: Slack workspaces, with Slack threads mapped to Matrix threads.
+framework: bridgev2
+license: AGPL-3.0
+homepage: https://github.com/mautrix/slack
+maturity: stable
+host_platforms: [linux, macos]
+source:
+  kind: github-release
+  repo: mautrix/slack
+  version: v0.2609.1
+  checksums: sha256sums.txt
+  artifacts:
+    linux-amd64: mautrix-slack-amd64
+    linux-arm64: mautrix-slack-arm64
+    linux-armv7: mautrix-slack-arm
+    darwin-arm64: mautrix-slack-darwin-arm64
+process:
+  binary: mautrix-slack
+  args: ["-c", "{{config}}", "-r", "{{registration}}", "--no-update"]
+  generate_example_config: ["-e", "-c", "{{config}}"]
+  default_port: 29335
+registration:
+  bot_username: slackbot
+  username_template: "slack_{{.}}"
+config:
+  matrix:
+    federate_rooms: false
+  encryption:
+    allow: true
+    default: true
+  backfill:
+    enabled: true
+login:
+  flows:
+    - id: token
+      title: Slack web session (token + d cookie)
+      help: >-
+        Sign in to Slack in an embedded browser; Crosschat captures the xoxc
+        token and the `d` cookie for the bridge.
+    - id: email
+      title: Email confirmation code
+    - id: app
+      title: Slack app (bot + app token)
+capabilities:
+  threads: yes
+  replies: yes
+  reactions: yes
+  edits: yes
+  contacts: yes
+  search_users: yes
+  create_group: no
+preflight:
+  - id: workspace_policy
+    severity: warning
+    message: >-
+      The bridge uses your personal Slack web session. Some company
+      workspaces detect or prohibit unofficial clients; check your
+      workspace's policy first.

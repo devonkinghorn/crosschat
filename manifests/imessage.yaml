@@ -1,0 +1,75 @@
+# iMessage via corten-matrix (bridgev2, MPL-2.0). Prebuilt binaries for
+# macOS (universal) and Linux amd64/arm64 are downloaded at install time.
+schema: crosschat.bridge/v1
+id: imessage
+display_name: iMessage
+network: imessage
+description: iMessage and SMS-relay through your Apple ID. Runs natively on a Mac, or on Linux with a hardware key extracted once from a Mac.
+framework: bridgev2
+license: MPL-2.0
+homepage: https://github.com/lrhodin/corten-matrix
+maturity: beta
+host_platforms: [linux, macos]
+source:
+  kind: github-release
+  repo: lrhodin/corten-matrix
+  version: 1.3.2
+  # Upstream publishes no checksum file; crosschatd records the hash on first
+  # install (trust on first use). Pin hashes here once verified.
+  artifacts:
+    linux-amd64: corten-matrix-linux-amd64
+    linux-arm64: corten-matrix-linux-arm64
+    darwin-universal: corten-matrix-macos
+process:
+  binary: corten-matrix
+  args: ["-c", "{{config}}", "-r", "{{registration}}", "--no-update"]
+  generate_example_config: ["-e", "-c", "{{config}}"]
+  default_port: 29332
+registration:
+  bot_username: imessagebot
+  username_template: "imessage_{{.}}"
+config:
+  matrix:
+    federate_rooms: false
+  encryption:
+    allow: true
+    default: true
+login:
+  flows:
+    - id: apple-id
+      title: Apple ID (on a Mac host)
+      help: Apple ID, password, 2FA code, then choose the phone number or email to send from.
+    - id: external-key
+      title: Apple ID with hardware key (Linux host)
+      help: >-
+        Paste the hardware key extracted on a Mac. The Crosschat macOS app can
+        run the upstream extractor for you and fill this in.
+capabilities:
+  threads: no
+  replies: yes
+  reactions: yes
+  edits: yes
+  contacts: yes
+  search_users: unknown
+  create_group: unknown
+preflight:
+  - id: contact_key_verification
+    severity: blocking
+    message: >-
+      Contact Key Verification must be turned OFF on your Apple ID
+      (iPhone: Settings → your name → Contact Key Verification), or login fails.
+    link: https://github.com/lrhodin/corten-matrix#troubleshooting
+  - id: icloud_history
+    severity: info
+    message: History backfill comes from iCloud (CloudKit) and asks for your iPhone passcode to join the iCloud Keychain trust circle.
+  - id: account_risk
+    severity: warning
+    message: Apple may flag the bridge's device registration. Consider the risk to your Apple ID before enabling.
+requirements:
+  - id: hardware_key
+    description: >-
+      On Linux hosts the bridge needs a hardware key extracted once from any
+      Mac. Only the Crosschat macOS app can run the extractor.
+    when_host: [linux]
+    provided_by: [macos]
+    login_field: hardware_key

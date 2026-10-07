@@ -1,0 +1,64 @@
+# Google Messages (RCS + SMS) via mautrix-gmessages.
+# The bridge is AGPL-3.0 and is downloaded from upstream at install time.
+schema: crosschat.bridge/v1
+id: gmessages
+display_name: Google Messages
+network: gmessages
+description: RCS and SMS through your Android phone's Google Messages app.
+framework: bridgev2
+license: AGPL-3.0
+homepage: https://github.com/mautrix/gmessages
+maturity: stable
+host_platforms: [linux, macos]
+source:
+  kind: github-release
+  repo: mautrix/gmessages
+  version: v0.2609.0
+  checksums: sha256sums.txt
+  artifacts:
+    linux-amd64: mautrix-gmessages-amd64
+    linux-arm64: mautrix-gmessages-arm64
+    linux-armv7: mautrix-gmessages-arm
+    darwin-arm64: mautrix-gmessages-darwin-arm64
+process:
+  binary: mautrix-gmessages
+  args: ["-c", "{{config}}", "-r", "{{registration}}", "--no-update"]
+  generate_example_config: ["-e", "-c", "{{config}}"]
+  default_port: 29336
+registration:
+  bot_username: gmessagesbot
+  username_template: "gmessages_{{.}}"
+config:
+  matrix:
+    federate_rooms: false   # portals stay local even on a federated server
+  encryption:
+    allow: true
+    default: true
+  backfill:
+    enabled: true
+login:
+  flows:
+    - id: google
+      title: Sign in with Google
+      help: >-
+        Opens Google sign-in in a fresh private webview to capture session
+        cookies, then asks you to tap the matching emoji in Google Messages on
+        your phone. QR pairing no longer works for most accounts.
+capabilities:
+  threads: no
+  replies: yes
+  reactions: yes
+  edits: no
+  contacts: yes
+  search_users: no
+  create_group: yes
+preflight:
+  - id: phone_online
+    severity: info
+    message: Your Android phone sends and receives the messages, so it must stay powered on and online.
+  - id: dbsc_cookies
+    severity: info
+    message: >-
+      The embedded browser must have Chrome device-bound session cookies
+      disabled, and Google may rotate cookies; Crosschat will prompt you to
+      sign in again when that happens.

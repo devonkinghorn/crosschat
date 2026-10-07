@@ -1,0 +1,58 @@
+# GroupMe via beeper/groupme (bridgev2 rewrite, revived 2026; AGPL-3.0).
+# Upstream publishes no release binaries yet, so crosschatd builds a pinned
+# commit from source with the Go toolchain at install time.
+schema: crosschat.bridge/v1
+id: groupme
+display_name: GroupMe
+network: groupme
+description: GroupMe groups and DMs. Early bridge; DMs are not fully validated upstream yet.
+framework: bridgev2
+license: AGPL-3.0
+homepage: https://github.com/beeper/groupme
+maturity: alpha
+host_platforms: [linux, macos]
+source:
+  kind: go-build
+  repo: https://github.com/beeper/groupme.git
+  rev: ff4fbcc6211d7e24fb0c240f6dc15e95555962db
+  package: ./cmd/mautrix-groupme
+  tags: [goolm]   # pure-Go olm, no libolm/cgo needed
+process:
+  binary: mautrix-groupme
+  args: ["-c", "{{config}}", "-r", "{{registration}}", "--no-update"]
+  generate_example_config: ["-e", "-c", "{{config}}"]
+  default_port: 29331
+registration:
+  bot_username: groupmebot
+  username_template: "groupme_{{.}}"
+config:
+  matrix:
+    federate_rooms: false
+  encryption:
+    allow: true
+    default: true
+login:
+  flows:
+    - id: access-token
+      title: GroupMe access token
+      help: >-
+        Recommended. Sign in at web.groupme.com, copy the `access_token`
+        value from local storage, and paste it here.
+    - id: web
+      title: GroupMe web sign-in
+      help: Embedded web sign-in. Google sign-in is blocked inside embedded browsers.
+capabilities:
+  threads: no
+  replies: yes
+  reactions: yes
+  edits: no
+  contacts: unknown
+  search_users: unknown
+  create_group: unknown
+preflight:
+  - id: early_bridge
+    severity: warning
+    message: >-
+      The GroupMe bridge is early: group text, images, files, reactions and
+      replies are tested upstream; DMs and some features are not fully
+      validated, and there is no history backfill yet.
