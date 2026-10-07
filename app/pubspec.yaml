@@ -1,0 +1,30 @@
+name: crosschat
+description: "Crosschat: open-source, self-hostable, native Beeper alternative built on Matrix."
+publish_to: 'none'
+
+version: 0.1.0-alpha.1+1
+
+environment:
+  sdk: ^3.13.5
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  crosschat_ffi:
+    path: rust_builder
+  flutter_rust_bridge: 2.13.0
+  http: ^1.6.0
+  shared_preferences: ^2.5.6
+  path_provider: ^2.1.6
+  qr_flutter: ^4.1.0
+  url_launcher: ^6.3.3
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true

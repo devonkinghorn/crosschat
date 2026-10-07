@@ -1,0 +1,20 @@
+[package]
+name = "crosschat_ffi"
+description = "flutter_rust_bridge facade over crosschat-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib", "staticlib"]
+
+[dependencies]
+flutter_rust_bridge = "=2.13.0"
+crosschat-core = { path = "../../crates/crosschat-core" }
+anyhow.workspace = true
+tokio.workspace = true
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(frb_expand)'] }
