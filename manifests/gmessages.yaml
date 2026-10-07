@@ -20,6 +20,16 @@ source:
     linux-arm64: mautrix-gmessages-arm64
     linux-armv7: mautrix-gmessages-arm
     darwin-arm64: mautrix-gmessages-darwin-arm64
+# Upstream's darwin binaries link libolm from Homebrew, which Homebrew no
+# longer ships, so on macOS build the same tag with the pure-Go olm instead.
+source_overrides:
+  darwin-arm64: &macos-src
+    kind: go-build
+    repo: https://github.com/mautrix/gmessages.git
+    rev: v0.2609.0
+    package: ./cmd/mautrix-gmessages
+    tags: [goolm]
+  darwin-amd64: *macos-src
 process:
   binary: mautrix-gmessages
   args: ["-c", "{{config}}", "-r", "{{registration}}", "--no-update"]

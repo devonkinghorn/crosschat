@@ -19,6 +19,16 @@ source:
     linux-arm64: mautrix-slack-arm64
     linux-armv7: mautrix-slack-arm
     darwin-arm64: mautrix-slack-darwin-arm64
+# Upstream's darwin binaries link libolm from Homebrew, which Homebrew no
+# longer ships, so on macOS build the same tag with the pure-Go olm instead.
+source_overrides:
+  darwin-arm64: &macos-src
+    kind: go-build
+    repo: https://github.com/mautrix/slack.git
+    rev: v0.2609.1
+    package: ./cmd/mautrix-slack
+    tags: [goolm]
+  darwin-amd64: *macos-src
 process:
   binary: mautrix-slack
   args: ["-c", "{{config}}", "-r", "{{registration}}", "--no-update"]

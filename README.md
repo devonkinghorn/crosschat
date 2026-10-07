@@ -22,7 +22,7 @@ Crosschat is a Slack/Discord-style chat app that puts iMessage, RCS/SMS (Google 
 | **Bridges** | Manifests for **iMessage** ([corten-matrix](https://github.com/lrhodin/corten-matrix)), **Google Messages** ([mautrix-gmessages](https://github.com/mautrix/gmessages)), **Slack** ([mautrix-slack](https://github.com/mautrix/slack)) and **GroupMe** ([beeper/groupme](https://github.com/beeper/groupme), early). All four ran live under `crosschatd` on Linux and returned their real login flows through the proxy. |
 | **First-run setup** | **No homeserver needed:** the desktop app (macOS, Linux) offers *Start a new server on this computer* (default) or *Use an existing Matrix server*. The first starts `crosschatd local` with a bundled Tuwunel on `localhost`, creates your owner account and signs you in; later launches reuse it. Tuwunel is downloaded (Linux) or built from source once (macOS). |
 | **App** (`app/`) | Network rail, chat sidebar, dense message list, composer, **Slack-style thread side panel** (pushed routes on phones), and a new-chat dialog that searches bridges through crosschatd and falls back to Matrix users. **Generic bridgev2 login renderer**: forms, QR, code, emoji, cookies via paste, complete. Settings with the bridge list and the **Android "keep connection open"** foreground-service toggle. Capability flags such as macOS-only iMessage key extraction. Demo mode. |
-| **Tests** | 58 daemon tests (unit, HTTP proxy against a fake bridge, local-mode owner bootstrap against a fake homeserver), 9 core unit tests, 26 Flutter tests, an **end-to-end smoke test** against a real local Tuwunel with a real bridge (`scripts/smoke.sh`), and a **desktop integration test** of the whole new-server flow (`app/integration_test/`). |
+| **Tests** | 60 daemon tests (unit, HTTP proxy against a fake bridge, local-mode owner bootstrap against a fake homeserver), 9 core unit tests, 26 Flutter tests, an **end-to-end smoke test** against a real local Tuwunel with a real bridge (`scripts/smoke.sh`), and a **desktop integration test** of the whole new-server flow (`app/integration_test/`). |
 
 ## What doesn't work yet
 
@@ -61,7 +61,7 @@ On first launch pick **Start a new server on this computer**, choose a username 
 
 1. starts `crosschatd local --dir <data>/server` **detached**, so bridges keep running after you close the window,
 2. finds or installs Tuwunel (see below) and starts it on `127.0.0.1:6167` with `server_name = "localhost"` and federation off,
-3. installs the enabled bridges (Google Messages and Slack by default),
+3. installs the enabled bridges (Google Messages and Slack by default; on macOS they're built from source with Go, see below),
 4. creates your account (`@you:localhost`, the server's first user and admin) with the server's private registration token,
 5. signs you in. crosschatd is at `http://127.0.0.1:29300`.
 
@@ -83,6 +83,7 @@ Later launches start or reuse the same server and restore your session without a
 
 - **crosschatd:** `$CROSSCHATD_BIN`, then next to the app executable (`crosschat.app/Contents/MacOS/crosschatd`, or the Linux bundle directory), then `target/release/crosschatd` / `target/debug/crosschatd` in the source checkout the app was built from, then `$PATH`. `scripts/bundle-local-server.sh [--with-tuwunel]` copies it (and Tuwunel) into a built app for use outside the checkout.
 - **Tuwunel** (resolved by crosschatd; pinned to v1.9.3): `$TUWUNEL_BIN`, then `homeserver.bundled.binary`, then a `tuwunel` next to `crosschatd`, then the cache. If none exist, crosschatd installs it into the cache: on **Linux** it downloads the upstream release and checks its pinned SHA-256; on **macOS**, where upstream ships no binaries and nixpkgs marks darwin broken, it runs `cargo install` at the pinned tag (about 7 min on an M-series Mac, once; needs rustup). The app shows progress. To do it ahead of time: `crosschatd install-tuwunel`.
+- **Bridges on macOS need Go** (`brew install go`; any Go ≥ 1.21, it fetches the pinned toolchain itself). Upstream's `darwin-arm64` mautrix binaries link `libolm.3.dylib` from Homebrew, which Homebrew no longer ships, so the manifests' `source_overrides` build the same tags with the pure-Go olm (`-tags goolm`) instead. Linux uses the upstream releases.
 - **Overrides:** `CROSSCHAT_HOME` (env, or `--dart-define=CROSSCHAT_HOME=…`) moves all app data, e.g. for a throwaway test profile. `CROSSCHAT_CACHE_DIR` moves the Tuwunel cache.
 
 `crosschatd local` works without the app too: `crosschatd local --dir ~/crosschat-server`, then `GET http://127.0.0.1:29300/_crosschat/v1/local/status` and `POST /_crosschat/v1/local/owner` with the token from `data/admin.token`.
@@ -93,7 +94,7 @@ Requirements:
 - **Rust** ≥ 1.96 (`rustup`).
 - **Flutter** 3.47+.
 - **For Linux desktop builds:** `clang cmake ninja-build pkg-config libgtk-3-dev`.
-- **For bridges:** Go, only if you enable GroupMe, which is built from source.
+- **For bridges:** Go, if you enable GroupMe (built from source everywhere) or run bridges on macOS (built from source there).
 
 ### 1. The daemon (on your server)
 
@@ -159,7 +160,7 @@ Notes:
    sudo xcodebuild -license accept
    xcodebuild -runFirstLaunch
    ```
-2. **Homebrew tools.** Flutter, CocoaPods (some Flutter plugins still use it), and Go (only needed for the GroupMe bridge):
+2. **Homebrew tools.** Flutter, CocoaPods (some Flutter plugins still use it), and Go (bridges are built from source on macOS):
    ```bash
    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
    brew install --cask flutter

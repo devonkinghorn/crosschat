@@ -26,11 +26,11 @@ pub fn release_url(repo: &str, version: &str, file: &str) -> String {
     format!("https://github.com/{repo}/releases/download/{version}/{file}")
 }
 
-/// Where a manifest's binary is (or will be) installed.
-pub fn install_path(manifest: &Manifest, bin_root: &Path) -> PathBuf {
-    let version = match &manifest.source {
+/// Where a manifest's binary is (or will be) installed on `platform`.
+pub fn install_path(manifest: &Manifest, bin_root: &Path, platform: &str) -> PathBuf {
+    let version = match manifest.source_for(platform) {
         Source::GithubRelease { version, .. } => version.clone(),
-        Source::GoBuild { rev, .. } => rev.chars().take(12).collect(),
+        Source::GoBuild { rev, .. } => format!("src-{}", rev.chars().take(12).collect::<String>()),
     };
     bin_root
         .join(&manifest.id)
@@ -69,11 +69,11 @@ pub async fn ensure_installed(
     platform: &str,
     http: &reqwest::Client,
 ) -> Result<PathBuf> {
-    let target = install_path(manifest, bin_root);
+    let target = install_path(manifest, bin_root, platform);
     if target.exists() {
         return Ok(target);
     }
-    match &manifest.source {
+    match manifest.source_for(platform) {
         Source::GithubRelease {
             repo,
             version,
@@ -137,12 +137,60 @@ pub async fn ensure_installed(
                 args.extend(["-tags", &tag_arg]);
             }
             args.extend(["-o", tmp.to_str().unwrap(), package]);
-            info!(bridge = manifest.id, rev, "building from source with go");
-            run("go", &args, Some(&src)).await?;
+            let go = find_go().ok_or_else(|| {
+                anyhow!(
+                    "{} is built from source on this platform and needs Go (e.g. `brew install go`)",
+                    manifest.display_name
+                )
+            })?;
+            info!(bridge = manifest.id, rev, go = %go.display(), "building from source with go");
+            run_go(&go, &args, &src).await?;
             std::fs::rename(&tmp, &target)?;
         }
     }
     Ok(target)
+}
+
+/// Find `go`: `$GOROOT/bin`, Homebrew, the official installer location,
+/// then `$PATH` (apps started from Finder get a minimal `$PATH`).
+pub fn find_go() -> Option<PathBuf> {
+    let mut c: Vec<PathBuf> = Vec::new();
+    c.extend(std::env::var_os("GOROOT").map(|r| PathBuf::from(r).join("bin/go")));
+    c.push("/opt/homebrew/bin/go".into());
+    c.push("/usr/local/go/bin/go".into());
+    c.push("/usr/local/bin/go".into());
+    if let Some(path) = std::env::var_os("PATH") {
+        c.extend(std::env::split_paths(&path).map(|d| d.join("go")));
+    }
+    c.into_iter().find(|p| p.is_file())
+}
+
+/// `go build` with Go's toolchain auto-download allowed (bridges pin newer
+/// toolchains in go.mod) and, on macOS, Apple clang for cgo: `/usr/bin`
+/// first on `PATH` and no `CC`/`CXX`/`AR` from Nix.
+async fn run_go(go: &Path, args: &[&str], cwd: &Path) -> Result<()> {
+    let mut cmd = tokio::process::Command::new(go);
+    cmd.args(args).current_dir(cwd).env("GOTOOLCHAIN", "auto");
+    if cfg!(target_os = "macos") {
+        cmd.env(
+            "PATH",
+            crate::tuwunel::macos_build_path(go, std::env::var_os("PATH").as_deref()),
+        )
+        .env_remove("CC")
+        .env_remove("CXX")
+        .env_remove("AR");
+    }
+    let out = cmd
+        .output()
+        .await
+        .with_context(|| format!("running {}", go.display()))?;
+    if !out.status.success() {
+        bail!(
+            "go {args:?} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    Ok(())
 }
 
 async fn run(program: &str, args: &[&str], cwd: Option<&Path>) -> Result<()> {
@@ -183,6 +231,21 @@ AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA *dist/mautrix-g
             "a".repeat(64)
         );
         assert_eq!(parse_checksums(listing, "mautrix-gmessages-arm"), None);
+    }
+
+    #[test]
+    fn install_path_depends_on_platform_source() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../manifests");
+        let m = Manifest::load(&dir.join("slack.yaml")).unwrap();
+        let root = Path::new("/bin-root");
+        assert_eq!(
+            install_path(&m, root, "linux-amd64"),
+            Path::new("/bin-root/slack/v0.2609.1/mautrix-slack")
+        );
+        assert_eq!(
+            install_path(&m, root, "darwin-arm64"),
+            Path::new("/bin-root/slack/src-v0.2609.1/mautrix-slack")
+        );
     }
 
     #[test]

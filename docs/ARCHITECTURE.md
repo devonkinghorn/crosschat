@@ -111,6 +111,7 @@ What the desktop app runs for **Start a new server on this computer**. Goal: Cro
 ### 4.4 Manifests
 One YAML file per bridge. The sections are:
 - `source`: `github-release` (artifacts per platform, checksums or pinned sha256) or `go-build` (repo, commit, tags).
+- `source_overrides`: per-platform replacement sources. Google Messages and Slack use it on macOS: upstream's darwin binaries need Homebrew's `libolm`, which Homebrew dropped, so the same tag is built with `-tags goolm`. `go` is looked up in `$GOROOT`, Homebrew and `/usr/local/go` as well as `$PATH`, with `GOTOOLCHAIN=auto` and Apple clang for cgo.
 - `process`: args and port.
 - `registration`: bot and ghost localparts.
 - `config`: deep-merge template.

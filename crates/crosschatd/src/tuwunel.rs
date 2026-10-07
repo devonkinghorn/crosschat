@@ -247,7 +247,7 @@ async fn build_from_source(cache: &Path, target: &Path, progress: Progress) -> R
     let log_path = cache.join("tuwunel-build.log");
     let log = std::fs::File::create(&log_path)?;
     progress(format!(
-        "Building the Matrix server (Tuwunel {VERSION}) from source. First run on macOS only, ~10-20 min"
+        "Building the Matrix server (Tuwunel {VERSION}) from source. first run on macOS only, ~10 min"
     ));
     info!(cargo = %cargo.display(), log = %log_path.display(), "building tuwunel from source");
     let mut cmd = tokio::process::Command::new(&cargo);
@@ -295,7 +295,7 @@ async fn build_from_source(cache: &Path, target: &Path, progress: Progress) -> R
             compiled += 1;
             if compiled.is_multiple_of(10) {
                 progress(format!(
-                    "Building the Matrix server (Tuwunel {VERSION}) from source: {compiled} crates compiled. First run on macOS only, ~10-20 min"
+                    "Building the Matrix server (Tuwunel {VERSION}) from source: {compiled} crates compiled. first run on macOS only, ~10 min"
                 ));
             }
         }

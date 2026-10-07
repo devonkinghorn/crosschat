@@ -47,6 +47,10 @@ pub struct Manifest {
     /// Host OSes the bridge can run on (`linux`, `macos`).
     pub host_platforms: Vec<String>,
     pub source: Source,
+    /// Per-platform replacement for `source` (e.g. build from source on
+    /// macOS when upstream's darwin binary links a library users can't get).
+    #[serde(default)]
+    pub source_overrides: BTreeMap<String, Source>,
     pub process: ProcessSpec,
     pub registration: RegistrationSpec,
     /// Network-specific config, deep-merged over the bridge's example config.
@@ -289,6 +293,48 @@ pub fn current_host_os() -> &'static str {
     std::env::consts::OS
 }
 
+fn validate_source(src: &Source, at: &str, p: &mut Vec<String>) {
+    match src {
+        Source::GithubRelease {
+            repo,
+            version,
+            artifacts,
+            sha256,
+            ..
+        } => {
+            if repo.split('/').count() != 2 {
+                p.push(format!("{at}.repo `{repo}` must be `owner/name`"));
+            }
+            if version.trim().is_empty() {
+                p.push(format!("{at}.version is empty"));
+            }
+            if artifacts.is_empty() {
+                p.push(format!("{at}.artifacts is empty"));
+            }
+            for k in artifacts.keys().chain(sha256.keys()) {
+                if !PLATFORMS.contains(&k.as_str()) {
+                    p.push(format!("unknown artifact platform `{k}`"));
+                }
+            }
+        }
+        Source::GoBuild {
+            repo, rev, package, ..
+        } => {
+            if !repo.starts_with("https://") {
+                p.push(format!("{at}.repo for go-build must be an https git URL"));
+            }
+            if rev.len() < 7 {
+                p.push(format!("{at}.rev must pin a commit or tag"));
+            }
+            if !package.starts_with("./") {
+                p.push(format!(
+                    "{at}.package must be a relative Go package path like ./cmd/x"
+                ));
+            }
+        }
+    }
+}
+
 impl Manifest {
     pub fn from_yaml(text: &str, path: &str) -> Result<Self, ManifestError> {
         let m: Manifest = serde_yaml_ng::from_str(text).map_err(|source| ManifestError::Parse {
@@ -357,42 +403,12 @@ impl Manifest {
                 p.push(format!("unknown host platform `{hp}`"));
             }
         }
-        match &self.source {
-            Source::GithubRelease {
-                repo,
-                version,
-                artifacts,
-                sha256,
-                ..
-            } => {
-                if repo.split('/').count() != 2 {
-                    p.push(format!("source.repo `{repo}` must be `owner/name`"));
-                }
-                if version.trim().is_empty() {
-                    p.push("source.version is empty".into());
-                }
-                if artifacts.is_empty() {
-                    p.push("source.artifacts is empty".into());
-                }
-                for k in artifacts.keys().chain(sha256.keys()) {
-                    if !PLATFORMS.contains(&k.as_str()) {
-                        p.push(format!("unknown artifact platform `{k}`"));
-                    }
-                }
+        validate_source(&self.source, "source", &mut p);
+        for (platform, src) in &self.source_overrides {
+            if !PLATFORMS.contains(&platform.as_str()) {
+                p.push(format!("unknown source_overrides platform `{platform}`"));
             }
-            Source::GoBuild {
-                repo, rev, package, ..
-            } => {
-                if !repo.starts_with("https://") {
-                    p.push("source.repo for go-build must be an https git URL".into());
-                }
-                if rev.len() < 7 {
-                    p.push("source.rev must pin a commit or tag".into());
-                }
-                if !package.starts_with("./") {
-                    p.push("source.package must be a relative Go package path like ./cmd/x".into());
-                }
-            }
+            validate_source(src, &format!("source_overrides.{platform}"), &mut p);
         }
         if self.process.binary.is_empty() || self.process.binary.contains('/') {
             p.push("process.binary must be a plain file name".into());
@@ -435,7 +451,7 @@ impl Manifest {
     /// Artifact file name for a platform key, falling back to a macOS
     /// universal binary on any darwin architecture.
     pub fn artifact_for(&self, platform: &str) -> Option<&str> {
-        let Source::GithubRelease { artifacts, .. } = &self.source else {
+        let Source::GithubRelease { artifacts, .. } = self.source_for(platform) else {
             return None;
         };
         artifacts
@@ -447,6 +463,12 @@ impl Manifest {
                     .flatten()
             })
             .map(String::as_str)
+    }
+
+    /// The install source for a platform key (`source_overrides`, falling
+    /// back to `source`).
+    pub fn source_for(&self, platform: &str) -> &Source {
+        self.source_overrides.get(platform).unwrap_or(&self.source)
     }
 
     pub fn supports_host(&self, host_os: &str) -> bool {
@@ -564,6 +586,46 @@ requirements:
         .unwrap();
         assert_eq!(m.artifact_for("darwin-arm64"), Some("uni"));
         assert_eq!(m.artifact_for("darwin-amd64"), Some("uni"));
+    }
+
+    #[test]
+    fn source_overrides_per_platform() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../manifests");
+        for id in ["gmessages", "slack"] {
+            let m = Manifest::load(&dir.join(format!("{id}.yaml"))).unwrap();
+            // macOS builds from source with goolm (upstream darwin binaries need libolm).
+            for p in ["darwin-arm64", "darwin-amd64"] {
+                match m.source_for(p) {
+                    Source::GoBuild { tags, package, .. } => {
+                        assert_eq!(tags, &vec!["goolm".to_string()], "{id} {p}");
+                        assert_eq!(package, &format!("./cmd/mautrix-{id}"));
+                    }
+                    other => panic!("{id} {p}: {other:?}"),
+                }
+                assert_eq!(m.artifact_for(p), None);
+            }
+            assert!(matches!(
+                m.source_for("linux-amd64"),
+                Source::GithubRelease { .. }
+            ));
+            assert!(m.artifact_for("linux-amd64").is_some());
+        }
+        let bad = GOOD.replace(
+            "process:\n",
+            "source_overrides:\n  windows-amd64:\n    kind: go-build\n    repo: git@x\n    rev: abc\n    package: cmd\nprocess:\n",
+        );
+        match Manifest::from_yaml(&bad, "t") {
+            Err(ManifestError::Invalid { problems, .. }) => {
+                let all = problems.join("\n");
+                assert!(
+                    all.contains("unknown source_overrides platform `windows-amd64`"),
+                    "{all}"
+                );
+                assert!(all.contains("source_overrides.windows-amd64.repo"), "{all}");
+                assert!(all.contains("source_overrides.windows-amd64.rev"), "{all}");
+            }
+            other => panic!("expected invalid, got {other:?}"),
+        }
     }
 
     #[test]
