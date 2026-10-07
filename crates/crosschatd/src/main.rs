@@ -105,7 +105,12 @@ async fn main() -> Result<()> {
             .with_writer(std::io::stderr.and(std::sync::Mutex::new(file)))
             .init();
     } else {
-        tracing_subscriber::fmt().with_env_filter(filter()).init();
+        // stdout is for command output (install-tuwunel / fetch-bridges print
+        // paths that scripts capture); logs go to stderr.
+        tracing_subscriber::fmt()
+            .with_env_filter(filter())
+            .with_writer(std::io::stderr)
+            .init();
     }
     match cli.cmd {
         Cmd::Local {
