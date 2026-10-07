@@ -32,7 +32,7 @@ Crosschat is a Slack/Discord-style chat app that puts iMessage, RCS/SMS (Google 
 - Classic `/sync` only, no sliding sync yet. No encrypted store or keychain: `session.json` is saved with mode 0600.
 - Android persistent sync keeps the process alive, but the sync loop lives in the activity's engine, so swiping the app away stops it.
 - No push notifications. Push is planned for a paid tier.
-- The local server is **for this computer only** (`server_name` is `localhost`, no federation, loopback only): your phone can't reach it, and moving to a real domain later is a migration, not a rename (tracked in an issue). No Docker image, reverse-proxy recipes or federation/server-name wizard for a real server yet.
+- The local server is **for this computer only** (`server_name` is `localhost`, no federation, loopback only): your phone can't reach it, and moving to a real domain later is a migration, not a rename ([#1](https://github.com/devonkinghorn/crosschat/issues/1)). No Docker image, reverse-proxy recipes or federation/server-name wizard for a real server yet.
 - No UI yet to enable more bridges on the local server: edit `crosschatd.toml` in its data directory (below) and restart. **iOS and Windows builds are untested** (CI has a macOS job, but it isn't active yet; see below).
 - WhatsApp, Signal and Telegram are not included yet. They'll be new manifests later. There is no BlueBubbles support.
 
@@ -67,7 +67,7 @@ On first launch pick **Start a new server on this computer**, choose a username 
 
 Later launches start or reuse the same server and restore your session without asking. **Use an existing Matrix server** is the regular login form.
 
-> `server_name` is permanent in Matrix. The local server is for this computer only: no federation, and phones can't reach it. Moving to a real domain later means re-backfilling bridged chats (see the migration issue).
+> `server_name` is permanent in Matrix. The local server is for this computer only: no federation, and phones can't reach it. Moving to a real domain later means re-backfilling bridged chats (see [#1](https://github.com/devonkinghorn/crosschat/issues/1)).
 
 **Where things live**
 
@@ -238,7 +238,7 @@ CI covers Rust fmt/clippy/test, the end-to-end smoke test, Flutter analyze/test,
 
 1. **Daily-drivable:** E2EE verification and recovery, media, reactions, receipts, rich text, sliding sync, keychain storage.
 2. **Logins without a terminal:** an embedded cookie webview, real-account testing of all four networks, a health screen.
-3. **Real-server setup:** ✅ local server on this computer. Next: a wizard for a real server (server name, federation choice), migrating a local server to a real domain, a Docker image, reverse-proxy recipes.
+3. **Real-server setup:** ✅ local server on this computer. Next: a wizard for a real server (server name, federation choice), migrating a local server to a real domain ([#1](https://github.com/devonkinghorn/crosschat/issues/1)), a Docker image, reverse-proxy recipes.
 4. **Mobile:** sync loop inside the Android service, iOS, then an optional paid push tier and a ~$1/mo TLS-passthrough relay. The relay is documented only.
 5. **More networks:** WhatsApp, Signal, Telegram.
 
