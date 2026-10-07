@@ -1,6 +1,6 @@
 import 'dart:io';
 
-import 'package:path_provider/path_provider.dart';
+import '../local/app_paths.dart';
 
 import '../models.dart';
 import '../rust/api/matrix.dart' as rs;
@@ -13,8 +13,7 @@ class FfiBackend implements ChatBackend {
   String get name => 'matrix-rust-sdk';
 
   Future<String> _dataDir() async {
-    final base = await getApplicationSupportDirectory();
-    final dir = Directory('${base.path}/matrix');
+    final dir = Directory(await AppPaths.matrixStore());
     await dir.create(recursive: true);
     return dir.path;
   }

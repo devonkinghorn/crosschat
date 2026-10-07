@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 
 import '../backend/backend.dart';
 import '../daemon/daemon_client.dart';
+import '../local/local_server.dart';
 import '../models.dart';
 import '../platform.dart';
 import 'settings.dart';
@@ -12,9 +13,33 @@ import 'settings.dart';
 /// Single source of UI state. Plain ChangeNotifier; the Rust core owns the
 /// real Matrix state and pushes updates through [ChatBackend.updates].
 class AppState extends ChangeNotifier {
-  AppState({required this.backend, AppSettings? settings, PlatformCapabilities? capabilities, this.daemonHttp})
+  AppState({required this.backend, AppSettings? settings, PlatformCapabilities? capabilities, this.daemonHttp, this.localServer})
     : settings = settings ?? AppSettings(),
       capabilities = capabilities ?? PlatformCapabilities.current();
+
+  /// The this-computer-only server (desktop). Null = not available (tests,
+  /// demo mode, platforms without process support).
+  final LocalServerController? localServer;
+
+  /// Owner of the local server if one was set up on this computer.
+  String? localOwner;
+
+  /// Progress of starting/creating the local server (null when idle).
+  LocalServerStatus? localStatus;
+
+  /// Last local-server failure (shown on the setup/login screen).
+  String? localError;
+
+  bool get localServerSupported => localServer?.supported ?? false;
+
+  /// Logged in to the local server.
+  bool get isLocalSession =>
+      localServer != null && session != null && _sameUrl(session!.homeserver, localServer!.homeserverUrl);
+
+  static bool _sameUrl(String a, String b) {
+    String n(String u) => u.trim().replaceAll(RegExp(r'/+$'), '').toLowerCase();
+    return n(a) == n(b);
+  }
 
   final ChatBackend backend;
   final AppSettings settings;
@@ -68,11 +93,22 @@ class AppState extends ChangeNotifier {
       rooms.where((r) => (r.networkId ?? 'matrix') == network).fold(0, (a, r) => a + r.unread);
 
   Future<void> init() async {
+    final local = localServer;
+    if (local != null && local.supported) {
+      localOwner = await local.configuredOwner();
+      if (localOwner != null) {
+        // A server was set up here before: start it (or reuse the running one).
+        await _startLocal();
+      }
+    }
     try {
       session = await backend.restore();
       if (session != null) await _afterLogin();
     } catch (e) {
       error = 'Could not restore session: $e';
+    }
+    if (session != null && localError != null && isLocalSession) {
+      error = 'Local server: $localError';
     }
     initializing = false;
     notifyListeners();
@@ -88,6 +124,61 @@ class AppState extends ChangeNotifier {
       error = '$e';
     }
     notifyListeners();
+  }
+
+  Future<bool> _startLocal() async {
+    final local = localServer!;
+    localError = null;
+    localStatus = const LocalServerStatus(phase: 'starting', detail: 'Starting the local server');
+    notifyListeners();
+    try {
+      await local.start(
+        onProgress: (s) {
+          localStatus = s;
+          notifyListeners();
+        },
+      );
+      localStatus = null;
+      return true;
+    } catch (e) {
+      localError = '$e';
+      localStatus = null;
+      return false;
+    } finally {
+      notifyListeners();
+    }
+  }
+
+  /// First-run "Start a new server on this computer": start crosschatd +
+  /// Tuwunel, create the owner account, then log in to it.
+  Future<void> createLocalServer(String username, String password) async {
+    final local = localServer;
+    if (local == null || !local.supported) return;
+    error = null;
+    if (!await _startLocal()) return;
+    try {
+      localStatus = const LocalServerStatus(phase: 'starting', detail: 'Creating your account');
+      notifyListeners();
+      final userId = await local.createOwner(username, password);
+      localOwner = userId;
+      localStatus = const LocalServerStatus(phase: 'starting', detail: 'Signing in');
+      notifyListeners();
+      session = await backend.login(homeserver: local.homeserverUrl, username: username, password: password);
+      localStatus = null;
+      await _afterLogin();
+    } catch (e) {
+      localError = '$e';
+      localStatus = null;
+    }
+    notifyListeners();
+  }
+
+  /// Retry starting the configured local server (after a failure).
+  Future<void> retryLocalServer() async {
+    final local = localServer;
+    if (local == null) return;
+    await local.stop();
+    await _startLocal();
   }
 
   Future<void> _afterLogin() async {
@@ -108,7 +199,9 @@ class AppState extends ChangeNotifier {
   Future<void> connectDaemon() async {
     final s = session;
     if (s == null) return;
-    final url = settings.daemonUrl.isNotEmpty ? settings.daemonUrl : s.homeserver;
+    final url = isLocalSession
+        ? localServer!.daemonUrl
+        : (settings.daemonUrl.isNotEmpty ? settings.daemonUrl : s.homeserver);
     final client = DaemonClient(baseUrl: url, accessToken: s.accessToken, httpClient: daemonHttp);
     daemon = client;
     daemonAvailable = await client.isAvailable();

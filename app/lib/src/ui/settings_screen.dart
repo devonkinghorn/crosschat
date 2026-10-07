@@ -44,27 +44,57 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   _section('Account'),
                   ListTile(
                     title: Text(s.session?.userId ?? '—'),
-                    subtitle: Text('Device ${s.session?.deviceId ?? '—'} · ${s.session?.homeserver ?? ''} · ${s.backend.name}', style: const TextStyle(color: CC.textMuted)),
-                  ),
-                  _section('Networks (crosschatd)'),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: TextField(
-                            key: const Key('daemon-url'),
-                            controller: _daemonUrl,
-                            decoration: const InputDecoration(
-                              hintText: 'crosschatd URL (blank = same as homeserver)',
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        FilledButton(onPressed: () => s.setDaemonUrl(_daemonUrl.text.trim()), child: const Text('Connect')),
-                      ],
+                    subtitle: Text(
+                      'Device ${s.session?.deviceId ?? '—'} · ${s.session?.homeserver ?? ''} · ${s.backend.name}',
+                      style: const TextStyle(color: CC.textMuted),
                     ),
                   ),
+                  if (s.isLocalSession) ...[
+                    _section('Server on this computer'),
+                    ListTile(
+                      key: const Key('local-server-info'),
+                      leading: const Icon(Icons.computer_rounded, color: CC.accent),
+                      title: const Text('localhost · this computer only'),
+                      subtitle: FutureBuilder<String>(
+                        future: s.localServer!.dataDir(),
+                        builder: (context, snap) =>
+                            Text('No federation; phones can\'t reach it. Data: ${snap.data ?? '…'}', style: const TextStyle(color: CC.textMuted)),
+                      ),
+                      trailing: OutlinedButton(
+                        key: const Key('local-restart'),
+                        onPressed: s.localStatus != null
+                            ? null
+                            : () async {
+                                await s.retryLocalServer();
+                                await s.connectDaemon();
+                              },
+                        child: Text(s.localStatus?.detail ?? 'Restart server'),
+                      ),
+                    ),
+                    if (s.localError != null)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        child: Text(s.localError!, style: const TextStyle(color: CC.danger, fontSize: 13)),
+                      ),
+                  ],
+                  _section('Networks (crosschatd)'),
+                  if (!s.isLocalSession)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: TextField(
+                              key: const Key('daemon-url'),
+                              controller: _daemonUrl,
+                              decoration: const InputDecoration(hintText: 'crosschatd URL (blank = same as homeserver)'),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          FilledButton(onPressed: () => s.setDaemonUrl(_daemonUrl.text.trim()), child: const Text('Connect')),
+                        ],
+                      ),
+                    ),
                   ListTile(
                     leading: Icon(s.daemonAvailable ? Icons.check_circle : Icons.cloud_off, color: s.daemonAvailable ? CC.success : CC.textFaint),
                     title: Text(s.daemonAvailable ? 'Connected to crosschatd' : 'crosschatd not reachable'),
@@ -141,7 +171,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
             const SizedBox(width: 6),
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
-              decoration: BoxDecoration(border: Border.all(color: CC.warning), borderRadius: BorderRadius.circular(4)),
+              decoration: BoxDecoration(
+                border: Border.all(color: CC.warning),
+                borderRadius: BorderRadius.circular(4),
+              ),
               child: Text(b.maturity, style: const TextStyle(color: CC.warning, fontSize: 10)),
             ),
           ],
@@ -150,7 +183,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
       subtitle: Text('${b.enabled ? status : 'disabled'}${b.live == true ? ' · live' : ''}', style: const TextStyle(color: CC.textMuted)),
       trailing: FilledButton.tonal(
         onPressed: b.running
-            ? () => showDialog<void>(context: context, builder: (_) => BridgeLoginDialog(state: s, bridge: b))
+            ? () => showDialog<void>(
+                context: context,
+                builder: (_) => BridgeLoginDialog(state: s, bridge: b),
+              )
             : null,
         child: const Text('Connect'),
       ),
@@ -165,6 +201,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Widget _section(String t) => Padding(
     padding: const EdgeInsets.fromLTRB(16, 20, 16, 6),
-    child: Text(t.toUpperCase(), style: const TextStyle(color: CC.textMuted, fontSize: 12, fontWeight: FontWeight.w700, letterSpacing: 0.5)),
+    child: Text(
+      t.toUpperCase(),
+      style: const TextStyle(color: CC.textMuted, fontSize: 12, fontWeight: FontWeight.w700, letterSpacing: 0.5),
+    ),
   );
 }

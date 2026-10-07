@@ -4,16 +4,35 @@ import '../state/app_state.dart';
 import 'theme.dart';
 
 class LoginScreen extends StatefulWidget {
-  const LoginScreen({super.key, required this.state});
+  const LoginScreen({
+    super.key,
+    required this.state,
+    this.initialHomeserver = 'https://',
+    this.initialUsername = '',
+    this.subtitle = 'Sign in to your Matrix homeserver. Your bridged networks come along.',
+    this.onBack,
+    this.backLabel = 'Back',
+    this.notice,
+  });
+
+  /// Optional extra content above the form (e.g. local server status).
+  final Widget? notice;
   final AppState state;
+  final String initialHomeserver;
+  final String initialUsername;
+  final String subtitle;
+
+  /// Shows a back link (to the setup choice) when set.
+  final VoidCallback? onBack;
+  final String backLabel;
 
   @override
   State<LoginScreen> createState() => _LoginScreenState();
 }
 
 class _LoginScreenState extends State<LoginScreen> {
-  final _hs = TextEditingController(text: 'https://');
-  final _user = TextEditingController();
+  late final _hs = TextEditingController(text: widget.initialHomeserver);
+  late final _user = TextEditingController(text: widget.initialUsername);
   final _pass = TextEditingController();
   bool _busy = false;
 
@@ -42,15 +61,23 @@ class _LoginScreenState extends State<LoginScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
+                      if (widget.onBack != null)
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: TextButton.icon(
+                            key: const Key('login-back'),
+                            onPressed: widget.onBack,
+                            icon: const Icon(Icons.arrow_back, size: 16),
+                            label: Text(widget.backLabel),
+                            style: TextButton.styleFrom(foregroundColor: CC.textMuted),
+                          ),
+                        ),
                       const Icon(Icons.hub_rounded, size: 44, color: CC.accent),
                       const SizedBox(height: 12),
                       const Text('Welcome to Crosschat', textAlign: TextAlign.center, style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
                       const SizedBox(height: 4),
-                      const Text(
-                        'Sign in to your Matrix homeserver. Your bridged networks come along.',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(color: CC.textMuted),
-                      ),
+                      Text(widget.subtitle, textAlign: TextAlign.center, style: const TextStyle(color: CC.textMuted)),
+                      if (widget.notice != null) ...[const SizedBox(height: 16), widget.notice!],
                       const SizedBox(height: 24),
                       _label('HOMESERVER'),
                       TextField(key: const Key('homeserver'), controller: _hs, keyboardType: TextInputType.url),

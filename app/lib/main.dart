@@ -6,11 +6,12 @@ import 'package:flutter/material.dart';
 import 'src/backend/backend.dart';
 import 'src/backend/demo_backend.dart';
 import 'src/backend/ffi_backend.dart';
+import 'src/local/local_server.dart';
 import 'src/rust/frb_generated.dart';
 import 'src/state/app_state.dart';
 import 'src/state/settings.dart';
 import 'src/ui/home_shell.dart';
-import 'src/ui/login_screen.dart';
+import 'src/ui/setup_screen.dart';
 import 'src/ui/theme.dart';
 
 const _demoDefine = bool.fromEnvironment('CROSSCHAT_DEMO');
@@ -21,22 +22,29 @@ bool get _demo => _demoDefine || (!kIsWeb && Platform.environment['CROSSCHAT_DEM
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  final state = await createAppState();
+  runApp(CrosschatApp(state: state));
+  await state.init();
+}
+
+/// Build the app state the way `main` does (also used by integration tests).
+Future<AppState> createAppState() async {
   ChatBackend backend;
+  LocalServerController? local;
   if (_demo) {
     backend = DemoBackend(autoLogin: true);
   } else {
     try {
       await RustLib.init();
       backend = FfiBackend();
+      if (!kIsWeb && (Platform.isMacOS || Platform.isLinux)) local = ProcessLocalServer();
     } catch (e) {
       debugPrint('Rust core unavailable ($e); falling back to demo data');
       backend = DemoBackend();
     }
   }
   final settings = await AppSettings.load();
-  final state = AppState(backend: backend, settings: settings);
-  runApp(CrosschatApp(state: state));
-  await state.init();
+  return AppState(backend: backend, settings: settings, localServer: local);
 }
 
 class CrosschatApp extends StatelessWidget {
@@ -52,9 +60,22 @@ class CrosschatApp extends StatelessWidget {
       listenable: state,
       builder: (context, _) {
         if (state.initializing) {
-          return const Scaffold(body: Center(child: CircularProgressIndicator()));
+          return Scaffold(
+            body: Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const CircularProgressIndicator(),
+                  if (state.localStatus != null) ...[
+                    const SizedBox(height: 16),
+                    Text(state.localStatus!.detail, key: const Key('init-progress')),
+                  ],
+                ],
+              ),
+            ),
+          );
         }
-        if (state.session == null) return LoginScreen(state: state);
+        if (state.session == null) return SetupScreen(state: state);
         return HomeShell(state: state);
       },
     ),

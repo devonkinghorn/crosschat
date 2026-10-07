@@ -126,6 +126,11 @@ Future<AppState> pumpApp(WidgetTester tester, {Size size = const Size(1600, 900)
 }
 
 Future<void> login(WidgetTester tester) async {
+  // First run shows the setup choice; pick "existing server".
+  if (find.byKey(const Key('setup-existing')).evaluate().isNotEmpty) {
+    await tester.tap(find.byKey(const Key('setup-existing')));
+    await tester.pumpAndSettle();
+  }
   await tester.enterText(find.byKey(const Key('homeserver')), 'https://matrix.crosschat.app');
   await tester.enterText(find.byKey(const Key('username')), 'devon');
   await tester.enterText(find.byKey(const Key('password')), 'hunter2');
@@ -136,7 +141,7 @@ Future<void> login(WidgetTester tester) async {
 void main() {
   testWidgets('login then Slack/Discord layout: rail, sidebar, channel', (tester) async {
     await pumpApp(tester);
-    expect(find.byKey(const Key('login')), findsOneWidget);
+    expect(find.byKey(const Key('setup-existing')), findsOneWidget);
     await login(tester);
 
     expect(find.byKey(const Key('rail-all')), findsOneWidget);
