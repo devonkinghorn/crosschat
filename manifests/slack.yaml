@@ -20,15 +20,20 @@ source:
     linux-armv7: mautrix-slack-arm
     darwin-arm64: mautrix-slack-darwin-arm64
 # Upstream's darwin binaries link libolm from Homebrew, which Homebrew no
-# longer ships, so on macOS build the same tag with the pure-Go olm instead.
+# longer ships, so macOS uses Crosschat's builds of the same tag with the
+# pure-Go olm (-tags goolm), made by scripts/build-prebuilt.sh.
 source_overrides:
-  darwin-arm64: &macos-src
-    kind: go-build
-    repo: https://github.com/mautrix/slack.git
-    rev: v0.2609.1
-    package: ./cmd/mautrix-slack
-    tags: [goolm]
-  darwin-amd64: *macos-src
+  darwin-arm64: &macos
+    kind: github-release
+    repo: devonkinghorn/crosschat
+    version: prebuilt-v1
+    artifacts:
+      darwin-arm64: mautrix-slack-v0.2609.1-darwin-arm64.zst
+      darwin-amd64: mautrix-slack-v0.2609.1-darwin-amd64.zst
+    sha256:
+      darwin-arm64: 2cabf0c515b05576cb4b2a3b5dd0a3f435646cf1a69b0597490e8163ec7dbb4f
+      darwin-amd64: f8987300cbcd1b7585f6049c50a6a159d34dec9ba52470b8a9cbaac1d71bb6e3
+  darwin-amd64: *macos
 process:
   binary: mautrix-slack
   args: ["-c", "{{config}}", "-r", "{{registration}}", "--no-update"]

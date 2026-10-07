@@ -1,6 +1,7 @@
 # GroupMe via beeper/groupme (bridgev2 rewrite, revived 2026; AGPL-3.0).
-# Upstream publishes no release binaries yet, so crosschatd builds a pinned
-# commit from source with the Go toolchain at install time.
+# Upstream publishes no release binaries yet, so Crosschat's prebuilt-v1
+# release carries builds of the pinned commit (scripts/build-prebuilt.sh,
+# -tags goolm, static musl on Linux). Nothing is compiled on users' machines.
 schema: crosschat.bridge/v1
 id: groupme
 display_name: GroupMe
@@ -12,11 +13,21 @@ homepage: https://github.com/beeper/groupme
 maturity: alpha
 host_platforms: [linux, macos]
 source:
-  kind: go-build
-  repo: https://github.com/beeper/groupme.git
-  rev: ff4fbcc6211d7e24fb0c240f6dc15e95555962db
-  package: ./cmd/mautrix-groupme
-  tags: [goolm]   # pure-Go olm, no libolm/cgo needed
+  kind: github-release
+  repo: devonkinghorn/crosschat
+  version: prebuilt-v1
+  # Built from https://github.com/beeper/groupme at
+  # ff4fbcc6211d7e24fb0c240f6dc15e95555962db.
+  artifacts:
+    linux-amd64: mautrix-groupme-ff4fbcc6211d-linux-amd64.zst
+    linux-arm64: mautrix-groupme-ff4fbcc6211d-linux-arm64.zst
+    darwin-arm64: mautrix-groupme-ff4fbcc6211d-darwin-arm64.zst
+    darwin-amd64: mautrix-groupme-ff4fbcc6211d-darwin-amd64.zst
+  sha256:
+    linux-amd64: 61beb2524b1010c339244d3f8a796acb88282db2b16c415d3ded7c9b34d9137b
+    linux-arm64: 40f79162b17f926543d631acef2a7dc37f78e632033c21ed206171f64e831ff6
+    darwin-arm64: 370f5942981d19beabeed1cf57619dc5443361fc56ccac7b685a9c25e4715505
+    darwin-amd64: 5951dbf42c3dd833659a46bdaa0ca50bdb1757c925cb7f109e1d5bc32c536ee3
 process:
   binary: mautrix-groupme
   args: ["-c", "{{config}}", "-r", "{{registration}}", "--no-update"]

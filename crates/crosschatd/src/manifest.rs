@@ -3,8 +3,11 @@
 //! A manifest tells crosschatd how to obtain an *unmodified* upstream bridge
 //! binary, how to run it, which config keys Crosschat manages, and what the UI
 //! needs to know (capabilities, preflight warnings, platform requirements).
-//! Bridge code is never vendored: binaries are fetched from upstream at
-//! install time.
+//! Bridge code is never vendored: prebuilt binaries are fetched at install
+//! time, from upstream's release or, where upstream has no usable binary for
+//! a platform, from Crosschat's `prebuilt-vN` release (built from unmodified
+//! upstream source by `scripts/build-prebuilt.sh`). Every artifact must have
+//! a pinned checksum; users never compile anything.
 
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -47,8 +50,8 @@ pub struct Manifest {
     /// Host OSes the bridge can run on (`linux`, `macos`).
     pub host_platforms: Vec<String>,
     pub source: Source,
-    /// Per-platform replacement for `source` (e.g. build from source on
-    /// macOS when upstream's darwin binary links a library users can't get).
+    /// Per-platform replacement for `source` (e.g. Crosschat's prebuilt
+    /// macOS binary when upstream's links a library users can't get).
     #[serde(default)]
     pub source_overrides: BTreeMap<String, Source>,
     pub process: ProcessSpec,
@@ -100,7 +103,8 @@ pub enum Source {
         #[serde(default)]
         sha256: BTreeMap<String, String>,
     },
-    /// Build from source with the Go toolchain (for bridges without releases).
+    /// Build from source with the Go toolchain. Developer option only: it
+    /// runs when `CROSSCHAT_ALLOW_SOURCE_BUILDS=1`, never for end users.
     GoBuild {
         repo: String,
         rev: String,
@@ -300,7 +304,7 @@ fn validate_source(src: &Source, at: &str, p: &mut Vec<String>) {
             version,
             artifacts,
             sha256,
-            ..
+            checksums,
         } => {
             if repo.split('/').count() != 2 {
                 p.push(format!("{at}.repo `{repo}` must be `owner/name`"));
@@ -314,6 +318,18 @@ fn validate_source(src: &Source, at: &str, p: &mut Vec<String>) {
             for k in artifacts.keys().chain(sha256.keys()) {
                 if !PLATFORMS.contains(&k.as_str()) {
                     p.push(format!("unknown artifact platform `{k}`"));
+                }
+            }
+            for (k, h) in sha256 {
+                if h.len() != 64 || !h.bytes().all(|b| b.is_ascii_hexdigit()) {
+                    p.push(format!("{at}.sha256.{k} must be a 64-digit hex SHA-256"));
+                }
+            }
+            if checksums.is_none() {
+                for k in artifacts.keys().filter(|k| !sha256.contains_key(*k)) {
+                    p.push(format!(
+                        "{at}.artifacts.{k} has no pinned checksum (add {at}.sha256.{k} or a checksums file)"
+                    ));
                 }
             }
         }
@@ -465,6 +481,23 @@ impl Manifest {
             .map(String::as_str)
     }
 
+    /// Pinned SHA-256 of [`Self::artifact_for`]'s file, with the same
+    /// darwin-universal fallback.
+    pub fn sha256_for(&self, platform: &str) -> Option<&str> {
+        let Source::GithubRelease { sha256, .. } = self.source_for(platform) else {
+            return None;
+        };
+        sha256
+            .get(platform)
+            .or_else(|| {
+                platform
+                    .starts_with("darwin-")
+                    .then(|| sha256.get("darwin-universal"))
+                    .flatten()
+            })
+            .map(String::as_str)
+    }
+
     /// The install source for a platform key (`source_overrides`, falling
     /// back to `source`).
     pub fn source_for(&self, platform: &str) -> &Source {
@@ -586,6 +619,12 @@ requirements:
         .unwrap();
         assert_eq!(m.artifact_for("darwin-arm64"), Some("uni"));
         assert_eq!(m.artifact_for("darwin-amd64"), Some("uni"));
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../manifests");
+        let im = Manifest::load(&dir.join("imessage.yaml")).unwrap();
+        assert_eq!(im.artifact_for("darwin-arm64"), Some("corten-matrix-macos"));
+        assert_eq!(im.sha256_for("darwin-arm64"), im.sha256_for("darwin-amd64"));
+        assert_eq!(im.sha256_for("darwin-arm64").map(str::len), Some(64));
+        assert_eq!(im.sha256_for("linux-armv7"), None);
     }
 
     #[test]
@@ -593,21 +632,25 @@ requirements:
         let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../manifests");
         for id in ["gmessages", "slack"] {
             let m = Manifest::load(&dir.join(format!("{id}.yaml"))).unwrap();
-            // macOS builds from source with goolm (upstream darwin binaries need libolm).
+            // macOS uses Crosschat's goolm builds (upstream darwin binaries need libolm).
             for p in ["darwin-arm64", "darwin-amd64"] {
                 match m.source_for(p) {
-                    Source::GoBuild { tags, package, .. } => {
-                        assert_eq!(tags, &vec!["goolm".to_string()], "{id} {p}");
-                        assert_eq!(package, &format!("./cmd/mautrix-{id}"));
+                    Source::GithubRelease { repo, sha256, .. } => {
+                        assert_eq!(repo, PREBUILT_REPO, "{id} {p}");
+                        assert!(sha256.contains_key(p), "{id} {p}");
                     }
                     other => panic!("{id} {p}: {other:?}"),
                 }
-                assert_eq!(m.artifact_for(p), None);
+                let a = m.artifact_for(p).unwrap();
+                assert!(
+                    a.starts_with(&format!("mautrix-{id}-")) && a.ends_with(&format!("-{p}.zst")),
+                    "{a}"
+                );
             }
-            assert!(matches!(
-                m.source_for("linux-amd64"),
-                Source::GithubRelease { .. }
-            ));
+            match m.source_for("linux-amd64") {
+                Source::GithubRelease { repo, .. } => assert_eq!(repo, &format!("mautrix/{id}")),
+                other => panic!("{other:?}"),
+            }
             assert!(m.artifact_for("linux-amd64").is_some());
         }
         let bad = GOOD.replace(
@@ -626,6 +669,76 @@ requirements:
             }
             other => panic!("expected invalid, got {other:?}"),
         }
+    }
+
+    const PREBUILT_REPO: &str = "devonkinghorn/crosschat";
+
+    #[test]
+    fn every_artifact_needs_a_pinned_checksum() {
+        let unpinned = GOOD.replace("  checksums: sha256sums.txt\n", "");
+        match Manifest::from_yaml(&unpinned, "t") {
+            Err(ManifestError::Invalid { problems, .. }) => {
+                assert_eq!(problems.len(), 2, "{problems:?}");
+                assert!(problems[0].contains("no pinned checksum"), "{problems:?}");
+            }
+            other => panic!("expected invalid, got {other:?}"),
+        }
+        let pinned = unpinned.replace(
+            "  artifacts:\n",
+            &format!(
+                "  sha256:\n    linux-amd64: {a}\n    darwin-arm64: {a}\n  artifacts:\n",
+                a = "a".repeat(64)
+            ),
+        );
+        Manifest::from_yaml(&pinned, "t").unwrap();
+        let short = GOOD.replace(
+            "  checksums: sha256sums.txt\n",
+            "  sha256:\n    linux-amd64: abc\n",
+        );
+        match Manifest::from_yaml(&short, "t") {
+            Err(ManifestError::Invalid { problems, .. }) => {
+                let all = problems.join("\n");
+                assert!(
+                    all.contains("source.sha256.linux-amd64 must be a 64-digit hex"),
+                    "{all}"
+                );
+                assert!(
+                    all.contains("source.artifacts.darwin-arm64 has no pinned checksum"),
+                    "{all}"
+                );
+            }
+            other => panic!("expected invalid, got {other:?}"),
+        }
+    }
+
+    /// Every artifact from Crosschat's own prebuilt release is listed in
+    /// `prebuilt/SHA256SUMS` with the same hash, and no manifest builds from
+    /// source on a platform a user can pick.
+    #[test]
+    fn prebuilt_pins_match_release_sums() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let sums = std::fs::read_to_string(root.join("prebuilt/SHA256SUMS")).unwrap();
+        let all = Manifest::load_dir(&root.join("manifests")).unwrap();
+        let mut checked = 0;
+        for m in &all {
+            for p in ["linux-amd64", "linux-arm64", "darwin-arm64", "darwin-amd64"] {
+                match m.source_for(p) {
+                    Source::GoBuild { .. } => panic!("{} builds from source on {p}", m.id),
+                    Source::GithubRelease { repo, sha256, .. } if repo == PREBUILT_REPO => {
+                        let a = m.artifact_for(p).unwrap_or_else(|| panic!("{} {p}", m.id));
+                        assert_eq!(
+                            crate::installer::parse_checksums(&sums, a).as_deref(),
+                            sha256.get(p).map(String::as_str),
+                            "{} {p} {a}",
+                            m.id
+                        );
+                        checked += 1;
+                    }
+                    Source::GithubRelease { .. } => {}
+                }
+            }
+        }
+        assert_eq!(checked, 8, "gmessages+slack on darwin x2, groupme x4");
     }
 
     #[test]

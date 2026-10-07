@@ -38,7 +38,7 @@ Future<void> _shot(WidgetTester tester, String name) async {
   File('${dir.path}/$name.png').writeAsBytesSync(bytes!.buffer.asUint8List());
 }
 
-Future<void> _pumpUntil(WidgetTester tester, Finder f, {Duration timeout = const Duration(minutes: 45)}) async {
+Future<void> _pumpUntil(WidgetTester tester, Finder f, {Duration timeout = const Duration(minutes: 15)}) async {
   final end = DateTime.now().add(timeout);
   while (f.evaluate().isEmpty) {
     if (DateTime.now().isAfter(end)) throw TimeoutException('timed out waiting for $f');
@@ -79,8 +79,8 @@ void main() {
     await tester.pump(const Duration(seconds: 2));
     await _shot(tester, '3-starting');
 
-    // First run downloads (Linux) or builds (macOS, unless cached) Tuwunel.
-    final end = DateTime.now().add(const Duration(minutes: 45));
+    // First run uses the bundled Tuwunel or downloads the prebuilt one.
+    final end = DateTime.now().add(const Duration(minutes: 15));
     var lastDetail = '';
     while (find.byKey(const Key('rail-all')).evaluate().isEmpty && state.localError == null) {
       if (DateTime.now().isAfter(end)) throw TimeoutException('new server flow timed out');
@@ -118,5 +118,5 @@ void main() {
     await _pumpUntil(tester, find.byKey(const Key('rail-all')), timeout: const Duration(seconds: 20));
 
     if (!_keep) await local2.stop();
-  }, timeout: const Timeout(Duration(minutes: 60)));
+  }, timeout: const Timeout(Duration(minutes: 20)));
 }

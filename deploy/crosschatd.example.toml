@@ -23,7 +23,7 @@ registration = { kind = "manual" }
 # [homeserver.bundled]
 # implementation = "tuwunel"
 # binary = "/usr/local/bin/tuwunel"   # optional: default is $TUWUNEL_BIN, a tuwunel next to crosschatd,
-#                                     # or the pinned v1.9.3 installed into ~/.cache/crosschat (Linux download, macOS source build)
+#                                     # or the pinned, prebuilt v1.9.3 downloaded into ~/.cache/crosschat
 # port = 6167
 # federation = false
 # allow_registration = true   # owner bootstrap with the vault registration token; turn off afterwards

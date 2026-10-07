@@ -64,8 +64,8 @@ impl Daemon {
                 .as_bytes(),
         )?;
 
-        // Resolve the homeserver binary first: on a fresh macOS install this
-        // builds Tuwunel from source, and a failure should surface early.
+        // Resolve the homeserver binary first: on a fresh install without a
+        // bundled copy this downloads Tuwunel, and a failure should surface early.
         let hs_binary = match &cfg.homeserver.bundled {
             Some(b) => Some(
                 tuwunel::resolve(b.binary.as_deref(), &http, progress.clone())

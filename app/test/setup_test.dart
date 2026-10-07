@@ -191,9 +191,9 @@ void main() {
       expect(find.text('That username is taken on this server.'), findsOneWidget);
       expect(state.session, isNull);
 
-      local.failStart = 'Building Tuwunel failed';
+      local.failStart = 'Downloading Tuwunel failed';
       await fillNewServer(tester, 'devon', 'correct horse');
-      expect(find.text('Building Tuwunel failed'), findsOneWidget);
+      expect(find.text('Downloading Tuwunel failed'), findsOneWidget);
       expect(state.session, isNull);
     });
 
@@ -290,7 +290,7 @@ void main() {
       var phase = 'starting';
       final client = MockClient((req) async {
         if (req.url.path == '/_crosschat/v1/local/status') {
-          final body = {'phase': phase, 'detail': 'Building', 'data_dir': dataDir, 'homeserver_url': 'http://127.0.0.1:7000'};
+          final body = {'phase': phase, 'detail': 'Downloading', 'data_dir': dataDir, 'homeserver_url': 'http://127.0.0.1:7000'};
           phase = 'ready';
           return http.Response(jsonEncode(body), 200);
         }
@@ -308,9 +308,9 @@ void main() {
     });
 
     test('a failed setup is reported', () async {
-      final client = MockClient((req) async => http.Response(jsonEncode({'phase': 'failed', 'error': 'building Tuwunel failed'}), 200));
+      final client = MockClient((req) async => http.Response(jsonEncode({'phase': 'failed', 'error': 'downloading Tuwunel failed'}), 200));
       final srv = ProcessLocalServer(client: client, dir: '/tmp/x', binary: '/nonexistent');
-      await expectLater(srv.start(), throwsA(isA<LocalServerException>().having((e) => e.message, 'message', 'building Tuwunel failed')));
+      await expectLater(srv.start(), throwsA(isA<LocalServerException>().having((e) => e.message, 'message', 'downloading Tuwunel failed')));
     });
 
     test('createOwner sends the admin token and maps errors', () async {

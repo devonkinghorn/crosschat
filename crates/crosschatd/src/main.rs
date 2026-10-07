@@ -1,6 +1,9 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use crosschatd::{api, config::Config, daemon, local, manifest::Manifest, registration, tuwunel};
+use crosschatd::{
+    api, config::Config, daemon, installer, local, manifest, manifest::Manifest, registration,
+    tuwunel,
+};
 use std::path::PathBuf;
 use tracing::info;
 
@@ -51,9 +54,25 @@ enum Cmd {
         #[arg(long, value_delimiter = ',', default_value = "gmessages,slack")]
         bridges: Vec<String>,
     },
-    /// Download (Linux) or build (macOS) the pinned Tuwunel into the cache
-    /// and print its path. Honors TUWUNEL_BIN and CROSSCHAT_CACHE_DIR.
-    InstallTuwunel,
+    /// Download the pinned, prebuilt Tuwunel into the cache (unless one is
+    /// already found) and print its path. Honors TUWUNEL_BIN and
+    /// CROSSCHAT_CACHE_DIR.
+    InstallTuwunel {
+        /// Developer option (macOS): build the pinned tag with cargo instead.
+        #[arg(long)]
+        from_source: bool,
+    },
+    /// Download prebuilt bridge binaries into DEST/<id>/<version>/ (how
+    /// scripts/bundle-local-server.sh fills the app's bridges/ directory).
+    FetchBridges {
+        #[arg(long)]
+        dest: PathBuf,
+        /// Platform key, e.g. darwin-arm64 (default: this computer).
+        #[arg(long)]
+        platform: Option<String>,
+        /// Bridge ids (default: the bridges local mode enables).
+        ids: Vec<String>,
+    },
     /// Print an example config file.
     ExampleConfig,
     /// Show daemon status (uses the local admin token).
@@ -105,10 +124,44 @@ async fn main() -> Result<()> {
                 return Err(e);
             }
         }
-        Cmd::InstallTuwunel => {
+        Cmd::InstallTuwunel { from_source } => {
             let progress: tuwunel::Progress = std::sync::Arc::new(|s| eprintln!("{s}"));
-            let p = tuwunel::resolve(None, &reqwest::Client::new(), progress).await?;
+            let http = reqwest::Client::new();
+            let p = if from_source {
+                tuwunel::install(&tuwunel::cache_dir(), &http, progress, true).await?
+            } else {
+                tuwunel::resolve(None, &http, progress).await?
+            };
             println!("{}", p.display());
+        }
+        Cmd::FetchBridges {
+            dest,
+            platform,
+            ids,
+        } => {
+            let platform = platform.unwrap_or_else(manifest::current_platform);
+            let ids = if ids.is_empty() {
+                local::DEFAULT_BRIDGES
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect()
+            } else {
+                ids
+            };
+            let http = reqwest::Client::new();
+            for id in &ids {
+                let (name, text) = local::EMBEDDED_MANIFESTS
+                    .iter()
+                    .find(|(n, _)| n.trim_end_matches(".yaml") == id)
+                    .with_context(|| format!("no manifest for bridge `{id}`"))?;
+                let m = Manifest::from_yaml(text, name)?;
+                let target = installer::install_path(&m, &dest, &platform);
+                if !target.is_file() {
+                    installer::fetch(&m, &target, &platform, &http).await?;
+                }
+                let _ = std::fs::remove_file(target.with_extension("sha256"));
+                println!("{}", target.display());
+            }
         }
         Cmd::Run { config } => {
             let cfg = Config::load(&config)?;

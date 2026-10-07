@@ -1,5 +1,5 @@
 # Google Messages (RCS + SMS) via mautrix-gmessages.
-# The bridge is AGPL-3.0 and is downloaded from upstream at install time.
+# The bridge is AGPL-3.0; prebuilt binaries are downloaded at install time.
 schema: crosschat.bridge/v1
 id: gmessages
 display_name: Google Messages
@@ -21,15 +21,20 @@ source:
     linux-armv7: mautrix-gmessages-arm
     darwin-arm64: mautrix-gmessages-darwin-arm64
 # Upstream's darwin binaries link libolm from Homebrew, which Homebrew no
-# longer ships, so on macOS build the same tag with the pure-Go olm instead.
+# longer ships, so macOS uses Crosschat's builds of the same tag with the
+# pure-Go olm (-tags goolm), made by scripts/build-prebuilt.sh.
 source_overrides:
-  darwin-arm64: &macos-src
-    kind: go-build
-    repo: https://github.com/mautrix/gmessages.git
-    rev: v0.2609.0
-    package: ./cmd/mautrix-gmessages
-    tags: [goolm]
-  darwin-amd64: *macos-src
+  darwin-arm64: &macos
+    kind: github-release
+    repo: devonkinghorn/crosschat
+    version: prebuilt-v1
+    artifacts:
+      darwin-arm64: mautrix-gmessages-v0.2609.0-darwin-arm64.zst
+      darwin-amd64: mautrix-gmessages-v0.2609.0-darwin-amd64.zst
+    sha256:
+      darwin-arm64: a77aa5504dc23a9f103b0085c5914df537d66c8b451b18eea7bd13ef614e3dfb
+      darwin-amd64: bf45ad383aaa39769026223a2ae86e5a9a474036dca5341fec8992a8a6bf68c3
+  darwin-amd64: *macos
 process:
   binary: mautrix-gmessages
   args: ["-c", "{{config}}", "-r", "{{registration}}", "--no-update"]

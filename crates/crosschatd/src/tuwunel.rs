@@ -8,12 +8,16 @@
 //!    packaged app ships it).
 //! 4. The pinned version in the Crosschat cache
 //!    (`<cache>/tuwunel-<version>/bin/tuwunel`).
-//! 5. Install the pinned version into the cache:
-//!    * Linux: download the upstream release (SHA-256 pinned here), unpack
-//!      the `.zst`.
+//! 5. Download the pinned version into the cache (SHA-256 pinned here,
+//!    `.zst` unpacked in-process):
+//!    * Linux: the upstream release.
 //!    * macOS: upstream publishes no macOS binaries (and nixpkgs marks the
-//!      darwin build broken), so build it from source at the pinned tag with
-//!      `cargo install` (~10-20 min once, then cached).
+//!      darwin build broken), so Crosschat's `prebuilt-vN` release carries
+//!      ones built from the unmodified tag by `scripts/build-prebuilt.sh`.
+//!
+//! Users never compile anything. Building from source (`cargo install` at the
+//! pinned tag, ~10 min) only happens for developers who opt in with
+//! `CROSSCHAT_ALLOW_SOURCE_BUILDS=1` or `crosschatd install-tuwunel --from-source`.
 //!
 //! `$PATH` is deliberately not searched: a random `tuwunel` of another
 //! version could silently migrate the database.
@@ -40,6 +44,25 @@ pub const LINUX_ASSETS: &[(&str, &str, &str)] = &[
         "linux-arm64",
         "v1.9.3-release-all-aarch64-v8-linux-gnu-tuwunel.zst",
         "c1a309fe9dc167a40cefddee999d279f752fb493bb00a52af41584c434ba838f",
+    ),
+];
+
+/// Crosschat's release with prebuilt binaries upstream doesn't publish.
+pub const PREBUILT_REPO: &str = "devonkinghorn/crosschat";
+pub const PREBUILT_RELEASE: &str = "prebuilt-v1";
+
+/// macOS builds of [`VERSION`] in [`PREBUILT_RELEASE`] (minimum macOS 12)
+/// with their SHA-256 (also in `prebuilt/SHA256SUMS`).
+pub const MACOS_ASSETS: &[(&str, &str, &str)] = &[
+    (
+        "darwin-arm64",
+        "tuwunel-v1.9.3-darwin-arm64.zst",
+        "3e44eb10ce750c5340434ffd9fd6aa0b5b045995383eb52aa2337fb43410b6af",
+    ),
+    (
+        "darwin-amd64",
+        "tuwunel-v1.9.3-darwin-amd64.zst",
+        "493e969b0d5f807676b5055073e69c02643f5edd3ddb42c52564780918aead85",
     ),
 ];
 
@@ -124,30 +147,53 @@ pub async fn resolve(
     {
         return Ok(found);
     }
-    install(&cache, http, progress).await
+    match install(&cache, http, progress.clone(), false).await {
+        Err(e) if cfg!(target_os = "macos") && crate::installer::source_builds_allowed() => {
+            tracing::warn!(
+                "prebuilt Tuwunel unavailable ({e:#}); building from source (developer opt-in)"
+            );
+            install(&cache, http, progress, true).await
+        }
+        other => other,
+    }
 }
 
-/// Install the pinned Tuwunel into `cache` and return its path.
-pub async fn install(cache: &Path, http: &reqwest::Client, progress: Progress) -> Result<PathBuf> {
+/// Install the pinned Tuwunel into `cache` and return its path: download
+/// the prebuilt binary, or build from source when `from_source` (developer
+/// option) is set.
+pub async fn install(
+    cache: &Path,
+    http: &reqwest::Client,
+    progress: Progress,
+    from_source: bool,
+) -> Result<PathBuf> {
     let target = cached_path(cache);
-    if cfg!(target_os = "macos") {
+    if from_source {
+        if !cfg!(target_os = "macos") {
+            bail!("source builds of Tuwunel are only wired up for macOS");
+        }
         build_from_source(cache, &target, progress).await?;
-    } else if cfg!(target_os = "linux") {
-        download_linux(&target, http, progress).await?;
-    } else {
-        bail!(
-            "no Tuwunel build for {}; set TUWUNEL_BIN",
-            std::env::consts::OS
-        );
+        return Ok(target);
     }
+    let platform = crate::manifest::current_platform();
+    let (repo, release, file, sha) = asset(&platform).ok_or_else(|| {
+        anyhow!("the Matrix server (Tuwunel {VERSION}) isn't available for this computer ({platform}); set TUWUNEL_BIN")
+    })?;
+    download(&target, http, progress, repo, release, file, sha).await?;
     Ok(target)
 }
 
-fn linux_asset(platform: &str) -> Option<(&'static str, &'static str)> {
-    LINUX_ASSETS
-        .iter()
-        .find(|(p, _, _)| *p == platform)
-        .map(|(_, f, h)| (*f, *h))
+/// Release asset for a platform: `(repo, release tag, file, sha256)`.
+pub fn asset(platform: &str) -> Option<(&'static str, &'static str, &'static str, &'static str)> {
+    let find = |list: &'static [(&str, &str, &str)]| {
+        list.iter()
+            .find(|(p, _, _)| *p == platform)
+            .map(|(_, f, h)| (*f, *h))
+    };
+    if let Some((f, h)) = find(LINUX_ASSETS) {
+        return Some((REPO, VERSION, f, h));
+    }
+    find(MACOS_ASSETS).map(|(f, h)| (PREBUILT_REPO, PREBUILT_RELEASE, f, h))
 }
 
 /// Decompress a (possibly multi-frame) zstd stream.
@@ -163,11 +209,16 @@ pub fn unzstd(bytes: &[u8]) -> Result<Vec<u8>> {
     Ok(out)
 }
 
-async fn download_linux(target: &Path, http: &reqwest::Client, progress: Progress) -> Result<()> {
-    let platform = crate::manifest::current_platform();
-    let (file, sha) = linux_asset(&platform)
-        .ok_or_else(|| anyhow!("Tuwunel {VERSION} has no release for {platform}"))?;
-    let url = crate::installer::release_url(REPO, VERSION, file);
+async fn download(
+    target: &Path,
+    http: &reqwest::Client,
+    progress: Progress,
+    repo: &str,
+    release: &str,
+    file: &str,
+    sha: &str,
+) -> Result<()> {
+    let url = crate::installer::release_url(repo, release, file);
     progress(format!("Downloading the Matrix server (Tuwunel {VERSION})"));
     info!(%url, "downloading tuwunel");
     let bytes = http
@@ -348,14 +399,39 @@ mod tests {
     }
 
     #[test]
-    fn linux_assets_are_pinned_for_both_arches() {
+    fn assets_are_pinned_for_every_desktop_platform() {
         for p in ["linux-amd64", "linux-arm64"] {
-            let (file, sha) = linux_asset(p).unwrap();
+            let (repo, tag, file, sha) = asset(p).unwrap();
+            assert_eq!((repo, tag), (REPO, VERSION));
             assert!(file.starts_with(VERSION), "{file}");
             assert!(file.ends_with(".zst"));
             assert_eq!(sha.len(), 64);
         }
-        assert!(linux_asset("darwin-arm64").is_none());
+        for p in ["darwin-arm64", "darwin-amd64"] {
+            let (repo, tag, file, sha) = asset(p).unwrap();
+            assert_eq!((repo, tag), (PREBUILT_REPO, PREBUILT_RELEASE));
+            assert_eq!(file, format!("tuwunel-{VERSION}-{p}.zst"));
+            assert!(
+                sha.len() == 64 && sha.bytes().all(|b| b.is_ascii_hexdigit()),
+                "{sha}"
+            );
+        }
+        assert!(asset("linux-armv7").is_none());
+    }
+
+    #[test]
+    fn macos_assets_match_prebuilt_sums() {
+        let sums = std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../prebuilt/SHA256SUMS"),
+        )
+        .unwrap();
+        for (_, file, sha) in MACOS_ASSETS {
+            assert_eq!(
+                crate::installer::parse_checksums(&sums, file).as_deref(),
+                Some(*sha),
+                "{file}"
+            );
+        }
     }
 
     #[test]

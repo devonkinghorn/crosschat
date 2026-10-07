@@ -1,4 +1,15 @@
-//! Fetches unmodified upstream bridge binaries at install time.
+//! Installs bridge binaries. Users never compile anything:
+//!
+//! 1. A binary shipped with the app wins: `<bundled root>/<id>/<version>/<binary>`,
+//!    where the bundled root is `$CROSSCHAT_BRIDGES_DIR` or `bridges/` next to
+//!    the crosschatd executable (`scripts/bundle-local-server.sh` fills it).
+//! 2. Otherwise the prebuilt release asset is downloaded and its SHA-256
+//!    checked: upstream's release, or Crosschat's `prebuilt-vN` release
+//!    (built from unmodified upstream source by `scripts/build-prebuilt.sh`)
+//!    where upstream has no usable binary. `.zst` assets are decompressed.
+//! 3. `go-build` sources compile on the user's machine only when a developer
+//!    opts in with `CROSSCHAT_ALLOW_SOURCE_BUILDS=1`.
+//!
 //! Nothing AGPL is vendored in this repository.
 
 use crate::manifest::{Manifest, Source};
@@ -24,6 +35,25 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
 
 pub fn release_url(repo: &str, version: &str, file: &str) -> String {
     format!("https://github.com/{repo}/releases/download/{version}/{file}")
+}
+
+/// Developer opt-in for compiling on this machine (`go-build` bridges, the
+/// macOS Tuwunel fallback). Off by default: end users get prebuilt binaries.
+pub const SOURCE_BUILDS_ENV: &str = "CROSSCHAT_ALLOW_SOURCE_BUILDS";
+
+pub fn source_builds_allowed() -> bool {
+    std::env::var(SOURCE_BUILDS_ENV)
+        .map(|v| matches!(v.trim(), "1" | "true" | "yes"))
+        .unwrap_or(false)
+}
+
+/// Root of the bridge binaries shipped with the app, if any.
+pub fn bundled_root() -> Option<PathBuf> {
+    if let Some(d) = std::env::var_os("CROSSCHAT_BRIDGES_DIR").filter(|d| !d.is_empty()) {
+        return Some(PathBuf::from(d));
+    }
+    let exe = std::env::current_exe().ok()?;
+    Some(exe.parent()?.join("bridges"))
 }
 
 /// Where a manifest's binary is (or will be) installed on `platform`.
@@ -73,17 +103,38 @@ pub async fn ensure_installed(
     if target.exists() {
         return Ok(target);
     }
+    if let Some(bundled) = bundled_root()
+        .map(|root| install_path(manifest, &root, platform))
+        .filter(|p| p.is_file())
+    {
+        info!(bridge = manifest.id, path = %bundled.display(), "using bundled binary");
+        return Ok(bundled);
+    }
+    fetch(manifest, &target, platform, http).await?;
+    Ok(target)
+}
+
+/// Download (or, for developers, build) the binary for `platform` into
+/// `target`, ignoring anything bundled. Used by `crosschatd fetch-bridges`.
+pub async fn fetch(
+    manifest: &Manifest,
+    target: &Path,
+    platform: &str,
+    http: &reqwest::Client,
+) -> Result<()> {
     match manifest.source_for(platform) {
         Source::GithubRelease {
             repo,
             version,
             checksums,
-            sha256,
             ..
         } => {
-            let artifact = manifest
-                .artifact_for(platform)
-                .ok_or_else(|| anyhow!("{} has no release artifact for {platform}", manifest.id))?;
+            let artifact = manifest.artifact_for(platform).ok_or_else(|| {
+                anyhow!(
+                    "{} isn't available for this computer ({platform}) yet",
+                    manifest.display_name
+                )
+            })?;
             let url = release_url(repo, version, artifact);
             info!(bridge = manifest.id, %url, "downloading");
             let bytes = download(http, &url).await?;
@@ -96,7 +147,9 @@ pub async fn ensure_installed(
                         .ok_or_else(|| anyhow!("{artifact} missing from {file}"))?,
                 )
             } else {
-                sha256.get(platform).map(|s| s.to_ascii_lowercase())
+                manifest
+                    .sha256_for(platform)
+                    .map(|s| s.to_ascii_lowercase())
             };
             match expected {
                 Some(exp) if exp != actual => {
@@ -109,7 +162,12 @@ pub async fn ensure_installed(
                     "upstream publishes no checksums; recording hash (trust on first use)"
                 ),
             }
-            write_executable(&target, &bytes)?;
+            let bin = if artifact.ends_with(".zst") {
+                tokio::task::spawn_blocking(move || crate::tuwunel::unzstd(&bytes)).await??
+            } else {
+                bytes
+            };
+            write_executable(target, &bin)?;
             std::fs::write(target.with_extension("sha256"), &actual)?;
         }
         Source::GoBuild {
@@ -118,6 +176,12 @@ pub async fn ensure_installed(
             package,
             tags,
         } => {
+            if !source_builds_allowed() {
+                bail!(
+                    "{} has no prebuilt binary for this computer ({platform}) yet",
+                    manifest.display_name
+                );
+            }
             let dir = target.parent().unwrap().to_path_buf();
             let src = dir.join("src");
             std::fs::create_dir_all(&dir)?;
@@ -139,16 +203,16 @@ pub async fn ensure_installed(
             args.extend(["-o", tmp.to_str().unwrap(), package]);
             let go = find_go().ok_or_else(|| {
                 anyhow!(
-                    "{} is built from source on this platform and needs Go (e.g. `brew install go`)",
+                    "{SOURCE_BUILDS_ENV} is set but no Go toolchain was found to build {}",
                     manifest.display_name
                 )
             })?;
             info!(bridge = manifest.id, rev, go = %go.display(), "building from source with go");
             run_go(&go, &args, &src).await?;
-            std::fs::rename(&tmp, &target)?;
+            std::fs::rename(&tmp, target)?;
         }
     }
-    Ok(target)
+    Ok(())
 }
 
 /// Find `go`: `$GOROOT/bin`, Homebrew, the official installer location,
@@ -244,8 +308,74 @@ AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA *dist/mautrix-g
         );
         assert_eq!(
             install_path(&m, root, "darwin-arm64"),
-            Path::new("/bin-root/slack/src-v0.2609.1/mautrix-slack")
+            Path::new("/bin-root/slack/prebuilt-v1/mautrix-slack")
         );
+    }
+
+    fn repo_manifest(id: &str) -> Manifest {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../manifests");
+        Manifest::load(&dir.join(format!("{id}.yaml"))).unwrap()
+    }
+
+    /// Bundled binaries win over downloads, and go-build sources never run
+    /// without the developer opt-in (and never mention installing Go).
+    /// One test because both touch process-wide environment variables.
+    #[tokio::test]
+    async fn bundled_first_and_no_source_builds_for_users() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bundled = tmp.path().join("bundled");
+        let m = repo_manifest("slack");
+        let shipped = install_path(&m, &bundled, "darwin-arm64");
+        std::fs::create_dir_all(shipped.parent().unwrap()).unwrap();
+        std::fs::write(&shipped, b"#!/bin/sh\n").unwrap();
+        // SAFETY: only this test sets these variables.
+        unsafe {
+            std::env::set_var("CROSSCHAT_BRIDGES_DIR", &bundled);
+            std::env::remove_var(SOURCE_BUILDS_ENV);
+        }
+        let http = reqwest::Client::new();
+        let got = ensure_installed(&m, &tmp.path().join("bin"), "darwin-arm64", &http)
+            .await
+            .unwrap();
+        assert_eq!(got, shipped);
+
+        let text = std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../manifests/groupme.yaml"),
+        )
+        .unwrap()
+        .replace(
+            "source:\n  kind: github-release",
+            "source:\n  kind: go-build\n  repo: https://example.invalid/x.git\n  rev: 0123456789ab\n  package: ./cmd/x\nunused_release:\n  kind: github-release",
+        );
+        // Re-shape into a minimal go-build manifest: drop the release block.
+        let start = text.find("unused_release:").unwrap();
+        let end = text.find("process:").unwrap();
+        let text = format!("{}{}", &text[..start], &text[end..]);
+        let gb = Manifest::from_yaml(&text, "t").unwrap();
+        let err = ensure_installed(&gb, &tmp.path().join("bin"), "linux-amd64", &http)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("no prebuilt binary"), "{err}");
+        assert!(!err.contains("Go"), "{err}");
+        unsafe { std::env::remove_var("CROSSCHAT_BRIDGES_DIR") };
+    }
+
+    #[test]
+    fn zst_artifacts_decompress() {
+        // Same frame as tuwunel's test: `printf hello | zstd -c`.
+        let frame: [u8; 18] = [
+            0x28, 0xb5, 0x2f, 0xfd, 0x04, 0x58, 0x29, 0x00, 0x00, 0x68, 0x65, 0x6c, 0x6c, 0x6f,
+            0xa3, 0x6d, 0x9f, 0x88,
+        ];
+        assert_eq!(crate::tuwunel::unzstd(&frame).unwrap(), b"hello");
+        for id in ["gmessages", "slack"] {
+            let a = repo_manifest(id)
+                .artifact_for("darwin-arm64")
+                .unwrap()
+                .to_string();
+            assert!(a.ends_with(".zst"), "{a}");
+        }
     }
 
     #[test]
