@@ -31,7 +31,7 @@ Crosschat is a Slack/Discord-style chat app that puts iMessage, RCS/SMS (Google 
 - Classic `/sync` only, no sliding sync yet. No encrypted store or keychain: `session.json` is saved with mode 0600.
 - Android persistent sync keeps the process alive, but the sync loop lives in the activity's engine, so swiping the app away stops it.
 - No push notifications. Push is planned for a paid tier.
-- No setup wizard, Docker image or reverse-proxy recipes yet. No iOS, Windows or macOS builds tested.
+- No setup wizard, Docker image or reverse-proxy recipes yet. **macOS, iOS and Windows builds are untested** (CI has a macOS job, but it isn't active yet; see below).
 - WhatsApp, Signal and Telegram are not included yet. They'll be new manifests later. There is no BlueBubbles support.
 
 ## Layout
@@ -74,12 +74,87 @@ Bridges are **downloaded from upstream at install time** and are never vendored.
 ```bash
 cd app
 flutter pub get
-flutter run -d linux                  # real Rust core; log in to any Matrix homeserver
-CROSSCHAT_DEMO=1 flutter run -d linux # or: demo data, no server needed
-flutter build linux                   # also: flutter build apk
+flutter run -d linux                                      # real Rust core: log in to any Matrix homeserver
+flutter run -d linux --dart-define=CROSSCHAT_DEMO=true    # demo data, no server needed
+flutter build linux                                       # or: flutter build apk
+CROSSCHAT_DEMO=1 build/linux/x64/release/bundle/crosschat # demo mode for an already-built binary
 ```
 
 By default the app looks for crosschatd at your homeserver URL. You can change it under Settings → Networks, e.g. `http://127.0.0.1:29300`. Without crosschatd the app still works as a plain Matrix client.
+
+### Android
+
+The APK embeds the **real Rust core**: cargokit cross-compiles `crosschat_ffi` for each Android ABI with the NDK. Demo mode is only used with `--dart-define=CROSSCHAT_DEMO=true`, or if the native library fails to load.
+
+```bash
+# Prerequisites
+# - Android SDK with platforms;android-36, build-tools;36.0.0, ndk;28.2.13676358
+#   (Gradle fetches CMake itself)
+# - JDK 17+
+rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android
+cd app
+flutter build apk --release --split-per-abi --target-platform android-arm64   # ~70 MB, most phones
+adb install build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+```
+
+Notes:
+- **Set `JAVA_HOME`** to your JDK directory, not `/usr`. Flutter puts `$JAVA_HOME/bin` first on Gradle's `PATH`. If that's `/usr/bin` and your distro ships an old `/usr/bin/rustc`, the NDK build picks up the wrong compiler.
+- **Signing.** Release builds are signed with the debug key, so they're fine for sideloading but not for the Play Store.
+- **Persistent sync.** Enable it under Settings → Background sync. It shows an ongoing notification. On Android 13+ the app asks for notification permission.
+
+### macOS (step by step)
+
+> ⚠️ Not tested on a Mac yet. These steps match what the CI macOS job runs.
+
+1. **Xcode.** Install it from the App Store, then run:
+   ```bash
+   sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+   sudo xcodebuild -license accept
+   xcodebuild -runFirstLaunch
+   ```
+2. **Homebrew tools.** Flutter, CocoaPods (some Flutter plugins still use it), and Go (only needed for the GroupMe bridge):
+   ```bash
+   /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+   brew install --cask flutter
+   brew install cocoapods go
+   flutter doctor            # Xcode and macOS should be ✓
+   ```
+3. **Rust** (≥ 1.96), with both Mac targets so universal release builds work:
+   ```bash
+   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+   source "$HOME/.cargo/env"
+   rustup update stable
+   rustup target add aarch64-apple-darwin x86_64-apple-darwin
+   ```
+4. **Clone and test:**
+   ```bash
+   git clone https://github.com/devonkinghorn/crosschat.git
+   cd crosschat
+   cargo build && cargo test
+   ```
+5. **Run crosschatd** on the Mac. This is optional: the daemon can also run on a Linux server.
+   ```bash
+   cargo build --release -p crosschatd
+   cp deploy/crosschatd.example.toml crosschatd.toml
+   # edit: [homeserver] url + server_name, [auth] admins = ["@you:your.server"], enable bridges
+   ./target/release/crosschatd validate manifests
+   ./target/release/crosschatd run -c crosschatd.toml
+   ```
+   Tuwunel publishes Linux binaries only, so on a Mac point crosschatd at an existing homeserver (or build Tuwunel from source, untested). The mautrix bridges ship `darwin-arm64` binaries. corten-matrix (iMessage) is used as published upstream.
+6. **Run the app:**
+   ```bash
+   cd app
+   flutter pub get
+   flutter run -d macos                                    # real Rust core
+   flutter run -d macos --dart-define=CROSSCHAT_DEMO=true  # demo data
+   flutter build macos --release
+   open build/macos/Build/Products/Release/crosschat.app
+   ```
+   Set the crosschatd URL under Settings → Networks if it isn't served at your homeserver's `/_crosschat/` (e.g. `http://127.0.0.1:29300`).
+7. **CI build instead.** The unsigned CI artifact (`crosschat-macos-unsigned.zip`) isn't notarized. After unzipping, run `xattr -dr com.apple.quarantine crosschat.app` before opening it.
+8. **iMessage on a Linux host.** Download the upstream corten-matrix `extract-key` tool. Set its path in Settings (the macOS-only "iMessage hardware key" section). Then use **Extract from this Mac** in the iMessage login dialog. Turn **Contact Key Verification off** first.
+
+The alpha macOS app is **unsandboxed** so it can run the extractor. It has the `network.client` entitlement.
 
 ### 3. Tests
 
@@ -95,7 +170,7 @@ TUWUNEL_BIN=/path/to/tuwunel scripts/smoke.sh
 SMOKE_BRIDGES="gmessages slack imessage groupme" TUWUNEL_BIN=... scripts/smoke.sh   # all four (groupme needs Go)
 ```
 
-CI covers Rust fmt/clippy/test, the end-to-end smoke test, Flutter analyze/test, a Linux build and an APK build. The workflow lives in [`ci/github-actions-ci.yml`](ci/github-actions-ci.yml) and isn't active yet: the token that pushed this alpha lacked GitHub's `workflow` scope. To enable it, run `git mv ci/github-actions-ci.yml .github/workflows/ci.yml` and push with a token that has that scope.
+CI covers Rust fmt/clippy/test, the end-to-end smoke test, Flutter analyze/test, a Linux build, an APK build, and a macOS job (cargo test plus `flutter build macos`, uploading the unsigned .app). The workflow lives in [`ci/github-actions-ci.yml`](ci/github-actions-ci.yml) and isn't active yet: the token that pushed this alpha lacked GitHub's `workflow` scope. To enable it, run `git mv ci/github-actions-ci.yml .github/workflows/ci.yml` and push with a token that has that scope.
 
 ## Network notes
 

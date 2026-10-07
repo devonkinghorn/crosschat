@@ -97,8 +97,33 @@ jobs:
           channel: stable
           cache: true
       - working-directory: app
-        run: flutter build apk --release
+        run: flutter build apk --release --split-per-abi
       - uses: actions/upload-artifact@v4
         with:
-          name: crosschat-android-apk
-          path: app/build/app/outputs/flutter-apk/app-release.apk
+          name: crosschat-android-apks
+          path: app/build/app/outputs/flutter-apk/*.apk
+
+  macos:
+    name: macOS (cargo test, flutter build macos)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+      - name: Rust tests on macOS (core + crosschatd)
+        run: cargo test --workspace
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - working-directory: app
+        run: flutter build macos --release
+      - name: Zip unsigned app
+        run: ditto -c -k --sequesterRsrc --keepParent app/build/macos/Build/Products/Release/crosschat.app crosschat-macos-unsigned.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: crosschat-macos-unsigned
+          path: crosschat-macos-unsigned.zip
