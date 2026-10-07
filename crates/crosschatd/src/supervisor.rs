@@ -61,7 +61,10 @@ pub struct RestartTracker {
 
 impl RestartTracker {
     pub fn new(policy: BackoffPolicy) -> Self {
-        Self { policy, consecutive_failures: 0 }
+        Self {
+            policy,
+            consecutive_failures: 0,
+        }
     }
 
     pub fn consecutive_failures(&self) -> u32 {
@@ -92,9 +95,18 @@ impl RestartTracker {
 pub enum ProcState {
     Stopped,
     Starting,
-    Running { pid: u32, started_at_ms: u64 },
-    Backoff { attempt: u32, retry_in_ms: u64, last_exit: String },
-    Failed { reason: String },
+    Running {
+        pid: u32,
+        started_at_ms: u64,
+    },
+    Backoff {
+        attempt: u32,
+        retry_in_ms: u64,
+        last_exit: String,
+    },
+    Failed {
+        reason: String,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -168,16 +180,29 @@ impl ProcessHandle {
 }
 
 fn now_ms() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 /// Spawn a supervisor task for `spec`.
-pub fn spawn_supervised(spec: ProcessSpec, policy: BackoffPolicy, autostart: bool) -> ProcessHandle {
+pub fn spawn_supervised(
+    spec: ProcessSpec,
+    policy: BackoffPolicy,
+    autostart: bool,
+) -> ProcessHandle {
     let (tx, rx) = mpsc::unbounded_channel();
     let (state_tx, state_rx) = watch::channel(ProcState::Stopped);
     let logs = Arc::new(Mutex::new(VecDeque::with_capacity(LOG_LINES)));
     let restarts = Arc::new(AtomicU32::new(0));
-    let handle = ProcessHandle { name: spec.name.clone(), tx, state: state_rx, logs: logs.clone(), restarts: restarts.clone() };
+    let handle = ProcessHandle {
+        name: spec.name.clone(),
+        tx,
+        state: state_rx,
+        logs: logs.clone(),
+        restarts: restarts.clone(),
+    };
     tokio::spawn(run(spec, policy, autostart, rx, state_tx, logs, restarts));
     handle
 }
@@ -225,7 +250,12 @@ fn spawn_child(spec: &ProcessSpec, logs: &Arc<Mutex<VecDeque<String>>>) -> std::
     let logs = logs.clone();
     tokio::spawn(async move {
         let mut f = match &file {
-            Some(p) => tokio::fs::OpenOptions::new().create(true).append(true).open(p).await.ok(),
+            Some(p) => tokio::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(p)
+                .await
+                .ok(),
             None => None,
         };
         while let Some(line) = lrx.recv().await {
@@ -245,7 +275,10 @@ async fn terminate(child: &mut Child, name: &str) {
         unsafe {
             libc::kill(pid as i32, libc::SIGTERM);
         }
-        if tokio::time::timeout(Duration::from_secs(10), child.wait()).await.is_ok() {
+        if tokio::time::timeout(Duration::from_secs(10), child.wait())
+            .await
+            .is_ok()
+        {
             return;
         }
         warn!(name, "did not exit after SIGTERM, killing");
@@ -285,7 +318,10 @@ async fn run(
             Ok(mut child) => {
                 let pid = child.id().unwrap_or(0);
                 info!(name, pid, "started");
-                let _ = state.send(ProcState::Running { pid, started_at_ms: now_ms() });
+                let _ = state.send(ProcState::Running {
+                    pid,
+                    started_at_ms: now_ms(),
+                });
                 let started = Instant::now();
                 let outcome = loop {
                     tokio::select! {
@@ -326,7 +362,10 @@ async fn run(
         push_log(&logs, format!("[crosschatd] {name} {last_exit}"));
         match tracker.on_exit(ran_for) {
             Decision::GiveUp => {
-                let reason = format!("gave up after {} quick failures; last: {last_exit}", tracker.consecutive_failures() - 1);
+                let reason = format!(
+                    "gave up after {} quick failures; last: {last_exit}",
+                    tracker.consecutive_failures() - 1
+                );
                 let _ = state.send(ProcState::Failed { reason });
                 want_running = false;
                 // Wait for an explicit start/restart.
@@ -384,13 +423,31 @@ mod tests {
 
     #[test]
     fn tracker_resets_after_healthy_run_and_gives_up() {
-        let mut t = RestartTracker::new(BackoffPolicy { max_failures: Some(3), ..Default::default() });
-        assert_eq!(t.on_exit(Duration::from_secs(1)), Decision::RestartAfter(Duration::from_secs(1)));
-        assert_eq!(t.on_exit(Duration::from_secs(1)), Decision::RestartAfter(Duration::from_secs(2)));
+        let mut t = RestartTracker::new(BackoffPolicy {
+            max_failures: Some(3),
+            ..Default::default()
+        });
+        assert_eq!(
+            t.on_exit(Duration::from_secs(1)),
+            Decision::RestartAfter(Duration::from_secs(1))
+        );
+        assert_eq!(
+            t.on_exit(Duration::from_secs(1)),
+            Decision::RestartAfter(Duration::from_secs(2))
+        );
         // A long healthy run resets the counter.
-        assert_eq!(t.on_exit(Duration::from_secs(600)), Decision::RestartAfter(Duration::from_secs(1)));
-        assert_eq!(t.on_exit(Duration::ZERO), Decision::RestartAfter(Duration::from_secs(2)));
-        assert_eq!(t.on_exit(Duration::ZERO), Decision::RestartAfter(Duration::from_secs(4)));
+        assert_eq!(
+            t.on_exit(Duration::from_secs(600)),
+            Decision::RestartAfter(Duration::from_secs(1))
+        );
+        assert_eq!(
+            t.on_exit(Duration::ZERO),
+            Decision::RestartAfter(Duration::from_secs(2))
+        );
+        assert_eq!(
+            t.on_exit(Duration::ZERO),
+            Decision::RestartAfter(Duration::from_secs(4))
+        );
         assert_eq!(t.on_exit(Duration::ZERO), Decision::GiveUp);
     }
 
@@ -408,34 +465,73 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn crashing_process_is_restarted_then_marked_failed() {
-        let h = spawn_supervised(sh("crashy", "echo boom $CC_TEST; exit 3"), fast_policy(Some(3)), true);
-        let failed = h.wait_for(Duration::from_secs(10), |s| matches!(s, ProcState::Failed { .. })).await;
+        let h = spawn_supervised(
+            sh("crashy", "echo boom $CC_TEST; exit 3"),
+            fast_policy(Some(3)),
+            true,
+        );
+        let failed = h
+            .wait_for(Duration::from_secs(10), |s| {
+                matches!(s, ProcState::Failed { .. })
+            })
+            .await;
         assert!(failed, "state: {:?}", h.state());
         assert_eq!(h.restarts(), 3);
         let logs = h.logs(100);
-        assert!(logs.iter().filter(|l| l.as_str() == "boom hello").count() >= 3, "{logs:?}");
-        assert!(logs.iter().any(|l| l.contains("exit status: 3")), "{logs:?}");
+        assert!(
+            logs.iter().filter(|l| l.as_str() == "boom hello").count() >= 3,
+            "{logs:?}"
+        );
+        assert!(
+            logs.iter().any(|l| l.contains("exit status: 3")),
+            "{logs:?}"
+        );
         // Explicit start clears the failure.
         h.start();
-        assert!(h.wait_for(Duration::from_secs(5), |s| !matches!(s, ProcState::Failed { .. })).await);
+        assert!(
+            h.wait_for(Duration::from_secs(5), |s| !matches!(
+                s,
+                ProcState::Failed { .. }
+            ))
+            .await
+        );
         h.stop();
     }
 
     #[cfg(unix)]
     #[tokio::test]
     async fn stop_and_restart_long_running_process() {
-        let h = spawn_supervised(sh("sleeper", "echo up; exec sleep 30"), fast_policy(None), true);
-        assert!(h.wait_for(Duration::from_secs(5), |s| matches!(s, ProcState::Running { .. })).await);
-        let ProcState::Running { pid: pid1, .. } = h.state() else { unreachable!() };
+        let h = spawn_supervised(
+            sh("sleeper", "echo up; exec sleep 30"),
+            fast_policy(None),
+            true,
+        );
+        assert!(
+            h.wait_for(Duration::from_secs(5), |s| matches!(
+                s,
+                ProcState::Running { .. }
+            ))
+            .await
+        );
+        let ProcState::Running { pid: pid1, .. } = h.state() else {
+            unreachable!()
+        };
         h.restart();
         assert!(
-            h.wait_for(Duration::from_secs(15), |s| matches!(s, ProcState::Running { pid, .. } if *pid != pid1)).await,
+            h.wait_for(
+                Duration::from_secs(15),
+                |s| matches!(s, ProcState::Running { pid, .. } if *pid != pid1)
+            )
+            .await,
             "{:?}",
             h.state()
         );
         assert_eq!(h.restarts(), 1);
         h.stop();
-        assert!(h.wait_for(Duration::from_secs(15), |s| *s == ProcState::Stopped).await);
+        assert!(
+            h.wait_for(Duration::from_secs(15), |s| *s == ProcState::Stopped)
+                .await
+        );
     }
 
     #[cfg(unix)]
@@ -445,7 +541,13 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(100)).await;
         assert_eq!(h.state(), ProcState::Stopped);
         h.start();
-        assert!(h.wait_for(Duration::from_secs(5), |s| matches!(s, ProcState::Running { .. })).await);
+        assert!(
+            h.wait_for(Duration::from_secs(5), |s| matches!(
+                s,
+                ProcState::Running { .. }
+            ))
+            .await
+        );
         h.stop();
     }
 
@@ -455,6 +557,14 @@ mod tests {
         let mut spec = sh("missing", "");
         spec.program = "/nonexistent/binary".into();
         let h = spawn_supervised(spec, fast_policy(Some(2)), true);
-        assert!(h.wait_for(Duration::from_secs(5), |s| matches!(s, ProcState::Failed { reason } if reason.contains("spawn failed"))).await, "{:?}", h.state());
+        assert!(
+            h.wait_for(
+                Duration::from_secs(5),
+                |s| matches!(s, ProcState::Failed { reason } if reason.contains("spawn failed"))
+            )
+            .await,
+            "{:?}",
+            h.state()
+        );
     }
 }

@@ -32,11 +32,19 @@ pub fn install_path(manifest: &Manifest, bin_root: &Path) -> PathBuf {
         Source::GithubRelease { version, .. } => version.clone(),
         Source::GoBuild { rev, .. } => rev.chars().take(12).collect(),
     };
-    bin_root.join(&manifest.id).join(version).join(&manifest.process.binary)
+    bin_root
+        .join(&manifest.id)
+        .join(version)
+        .join(&manifest.process.binary)
 }
 
 async fn download(http: &reqwest::Client, url: &str) -> Result<Vec<u8>> {
-    let resp = http.get(url).send().await?.error_for_status().with_context(|| format!("GET {url}"))?;
+    let resp = http
+        .get(url)
+        .send()
+        .await?
+        .error_for_status()
+        .with_context(|| format!("GET {url}"))?;
     Ok(resp.bytes().await?.to_vec())
 }
 
@@ -55,13 +63,24 @@ fn write_executable(path: &Path, bytes: &[u8]) -> Result<()> {
 }
 
 /// Ensure the bridge binary is installed for this platform and return its path.
-pub async fn ensure_installed(manifest: &Manifest, bin_root: &Path, platform: &str, http: &reqwest::Client) -> Result<PathBuf> {
+pub async fn ensure_installed(
+    manifest: &Manifest,
+    bin_root: &Path,
+    platform: &str,
+    http: &reqwest::Client,
+) -> Result<PathBuf> {
     let target = install_path(manifest, bin_root);
     if target.exists() {
         return Ok(target);
     }
     match &manifest.source {
-        Source::GithubRelease { repo, version, checksums, sha256, .. } => {
+        Source::GithubRelease {
+            repo,
+            version,
+            checksums,
+            sha256,
+            ..
+        } => {
             let artifact = manifest
                 .artifact_for(platform)
                 .ok_or_else(|| anyhow!("{} has no release artifact for {platform}", manifest.id))?;
@@ -70,13 +89,19 @@ pub async fn ensure_installed(manifest: &Manifest, bin_root: &Path, platform: &s
             let bytes = download(http, &url).await?;
             let actual = sha256_hex(&bytes);
             let expected = if let Some(file) = checksums {
-                let listing = String::from_utf8(download(http, &release_url(repo, version, file)).await?)?;
-                Some(parse_checksums(&listing, artifact).ok_or_else(|| anyhow!("{artifact} missing from {file}"))?)
+                let listing =
+                    String::from_utf8(download(http, &release_url(repo, version, file)).await?)?;
+                Some(
+                    parse_checksums(&listing, artifact)
+                        .ok_or_else(|| anyhow!("{artifact} missing from {file}"))?,
+                )
             } else {
                 sha256.get(platform).map(|s| s.to_ascii_lowercase())
             };
             match expected {
-                Some(exp) if exp != actual => bail!("checksum mismatch for {artifact}: expected {exp}, got {actual}"),
+                Some(exp) if exp != actual => {
+                    bail!("checksum mismatch for {artifact}: expected {exp}, got {actual}")
+                }
                 Some(_) => info!(bridge = manifest.id, "checksum verified"),
                 None => warn!(
                     bridge = manifest.id,
@@ -87,12 +112,22 @@ pub async fn ensure_installed(manifest: &Manifest, bin_root: &Path, platform: &s
             write_executable(&target, &bytes)?;
             std::fs::write(target.with_extension("sha256"), &actual)?;
         }
-        Source::GoBuild { repo, rev, package, tags } => {
+        Source::GoBuild {
+            repo,
+            rev,
+            package,
+            tags,
+        } => {
             let dir = target.parent().unwrap().to_path_buf();
             let src = dir.join("src");
             std::fs::create_dir_all(&dir)?;
             if !src.exists() {
-                run("git", &["clone", "--filter=blob:none", repo, src.to_str().unwrap()], None).await?;
+                run(
+                    "git",
+                    &["clone", "--filter=blob:none", repo, src.to_str().unwrap()],
+                    None,
+                )
+                .await?;
             }
             run("git", &["checkout", "--detach", rev], Some(&src)).await?;
             let tmp = target.with_extension("build");
@@ -116,9 +151,15 @@ async fn run(program: &str, args: &[&str], cwd: Option<&Path>) -> Result<()> {
     if let Some(c) = cwd {
         cmd.current_dir(c);
     }
-    let out = cmd.output().await.with_context(|| format!("running {program}"))?;
+    let out = cmd
+        .output()
+        .await
+        .with_context(|| format!("running {program}"))?;
     if !out.status.success() {
-        bail!("{program} {args:?} failed: {}", String::from_utf8_lossy(&out.stderr));
+        bail!(
+            "{program} {args:?} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
     }
     Ok(())
 }
@@ -137,13 +178,19 @@ AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA *dist/mautrix-g
             parse_checksums(listing, "mautrix-gmessages-amd64").as_deref(),
             Some("0f343b0931126a20f133d67c2b018a3b5bd2a6b47e1d8a7c2f1d66f3a2b4c5d6")
         );
-        assert_eq!(parse_checksums(listing, "mautrix-gmessages-arm64").unwrap(), "a".repeat(64));
+        assert_eq!(
+            parse_checksums(listing, "mautrix-gmessages-arm64").unwrap(),
+            "a".repeat(64)
+        );
         assert_eq!(parse_checksums(listing, "mautrix-gmessages-arm"), None);
     }
 
     #[test]
     fn sha_and_urls() {
-        assert_eq!(sha256_hex(b"abc"), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+        assert_eq!(
+            sha256_hex(b"abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
         assert_eq!(
             release_url("mautrix/slack", "v1", "x"),
             "https://github.com/mautrix/slack/releases/download/v1/x"

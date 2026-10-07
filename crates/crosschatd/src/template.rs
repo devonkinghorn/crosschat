@@ -46,7 +46,9 @@ pub fn render_value(value: &Value, ctx: &Context) -> Result<Value, TemplateError
     Ok(match value {
         Value::String(s) => {
             let rendered = render(s, ctx)?;
-            let whole = PLACEHOLDER.find(s).is_some_and(|m| m.start() == 0 && m.end() == s.len());
+            let whole = PLACEHOLDER
+                .find(s)
+                .is_some_and(|m| m.start() == 0 && m.end() == s.len());
             if whole {
                 if let Ok(i) = rendered.parse::<i64>() {
                     Value::Number(i.into())
@@ -59,7 +61,11 @@ pub fn render_value(value: &Value, ctx: &Context) -> Result<Value, TemplateError
                 Value::String(rendered)
             }
         }
-        Value::Sequence(seq) => Value::Sequence(seq.iter().map(|v| render_value(v, ctx)).collect::<Result<_, _>>()?),
+        Value::Sequence(seq) => Value::Sequence(
+            seq.iter()
+                .map(|v| render_value(v, ctx))
+                .collect::<Result<_, _>>()?,
+        ),
         Value::Mapping(map) => {
             let mut out = serde_yaml_ng::Mapping::new();
             for (k, v) in map {
@@ -118,27 +124,44 @@ mod tests {
     use super::*;
 
     fn ctx() -> Context {
-        [("data_dir", "/d"), ("port", "29336"), ("hs.server_name", "example.com")]
-            .into_iter()
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect()
+        [
+            ("data_dir", "/d"),
+            ("port", "29336"),
+            ("hs.server_name", "example.com"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect()
     }
 
     #[test]
     fn renders_and_preserves_go_templates() {
-        assert_eq!(render("{{data_dir}}/config.yaml", &ctx()).unwrap(), "/d/config.yaml");
-        assert_eq!(render("gmessages_{{.}}", &ctx()).unwrap(), "gmessages_{{.}}");
-        assert_eq!(render("{{ hs.server_name }}", &ctx()).unwrap(), "example.com");
+        assert_eq!(
+            render("{{data_dir}}/config.yaml", &ctx()).unwrap(),
+            "/d/config.yaml"
+        );
+        assert_eq!(
+            render("gmessages_{{.}}", &ctx()).unwrap(),
+            "gmessages_{{.}}"
+        );
+        assert_eq!(
+            render("{{ hs.server_name }}", &ctx()).unwrap(),
+            "example.com"
+        );
     }
 
     #[test]
     fn unknown_variable_is_an_error() {
-        assert_eq!(render("{{nope}}", &ctx()), Err(TemplateError::Unknown("nope".into())));
+        assert_eq!(
+            render("{{nope}}", &ctx()),
+            Err(TemplateError::Unknown("nope".into()))
+        );
     }
 
     #[test]
     fn value_rendering_coerces_whole_scalars() {
-        let v: Value = serde_yaml_ng::from_str("port: '{{port}}'\naddr: 'http://x:{{port}}'").unwrap();
+        let v: Value =
+            serde_yaml_ng::from_str("port: '{{port}}'\naddr: 'http://x:{{port}}'").unwrap();
         let r = render_value(&v, &ctx()).unwrap();
         assert_eq!(r["port"], Value::Number(29336.into()));
         assert_eq!(r["addr"], Value::String("http://x:29336".into()));

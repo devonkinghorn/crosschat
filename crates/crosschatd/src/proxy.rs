@@ -16,11 +16,23 @@ pub enum ProxyError {
 }
 
 /// Build the upstream URL for a provisioning request.
-pub fn upstream_url(port: u16, rest: &str, query: Option<&str>, user_id: &str) -> Result<String, ProxyError> {
+pub fn upstream_url(
+    port: u16,
+    rest: &str,
+    query: Option<&str>,
+    user_id: &str,
+) -> Result<String, ProxyError> {
     let rest = rest.trim_start_matches('/');
     let lower = rest.to_ascii_lowercase();
-    let segments_ok = rest.split('/').all(|s| !s.is_empty() && s != "." && s != "..");
-    if !rest.starts_with("v3/") || !segments_ok || lower.contains("%2e") || lower.contains("%2f") || rest.contains('\\') {
+    let segments_ok = rest
+        .split('/')
+        .all(|s| !s.is_empty() && s != "." && s != "..");
+    if !rest.starts_with("v3/")
+        || !segments_ok
+        || lower.contains("%2e")
+        || lower.contains("%2f")
+        || rest.contains('\\')
+    {
         return Err(ProxyError::BadPath);
     }
     let mut ser = url::form_urlencoded::Serializer::new(String::new());
@@ -32,7 +44,10 @@ pub fn upstream_url(port: u16, rest: &str, query: Option<&str>, user_id: &str) -
         }
     }
     ser.append_pair("user_id", user_id);
-    Ok(format!("http://127.0.0.1:{port}/_matrix/provision/{rest}?{}", ser.finish()))
+    Ok(format!(
+        "http://127.0.0.1:{port}/_matrix/provision/{rest}?{}",
+        ser.finish()
+    ))
 }
 
 /// Identifiers that look like phone numbers or emails are worth resolving
@@ -40,7 +55,10 @@ pub fn upstream_url(port: u16, rest: &str, query: Option<&str>, user_id: &str) -
 pub fn looks_like_identifier(q: &str) -> bool {
     let q = q.trim();
     let digits = q.chars().filter(|c| c.is_ascii_digit()).count();
-    let phone = q.starts_with('+') && digits >= 7 && q.chars().all(|c| c.is_ascii_digit() || " +-().".contains(c));
+    let phone = q.starts_with('+')
+        && digits >= 7
+        && q.chars()
+            .all(|c| c.is_ascii_digit() || " +-().".contains(c));
     let email = q.contains('@') && q.contains('.') && !q.starts_with('@') && !q.contains(' ');
     phone || email
 }
@@ -74,7 +92,11 @@ pub fn tag_results(bridge: &str, network: &str, items: &[Value]) -> Vec<ContactR
                 identifiers: v
                     .get("identifiers")
                     .and_then(Value::as_array)
-                    .map(|a| a.iter().filter_map(|i| i.as_str().map(str::to_owned)).collect())
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|i| i.as_str().map(str::to_owned))
+                            .collect()
+                    })
                     .unwrap_or_default(),
                 mxid: s("mxid"),
                 dm_room_mxid: s("dm_room_mxid"),
@@ -97,16 +119,40 @@ mod tests {
 
     #[test]
     fn builds_url_and_forces_user_id() {
-        let u = upstream_url(29336, "v3/login/flows", Some("user_id=%40evil%3Ax&login_id=abc"), "@devon:example.com").unwrap();
-        assert_eq!(u, "http://127.0.0.1:29336/_matrix/provision/v3/login/flows?login_id=abc&user_id=%40devon%3Aexample.com");
+        let u = upstream_url(
+            29336,
+            "v3/login/flows",
+            Some("user_id=%40evil%3Ax&login_id=abc"),
+            "@devon:example.com",
+        )
+        .unwrap();
+        assert_eq!(
+            u,
+            "http://127.0.0.1:29336/_matrix/provision/v3/login/flows?login_id=abc&user_id=%40devon%3Aexample.com"
+        );
         let u = upstream_url(1, "/v3/whoami", None, "@a:b").unwrap();
-        assert_eq!(u, "http://127.0.0.1:1/_matrix/provision/v3/whoami?user_id=%40a%3Ab");
+        assert_eq!(
+            u,
+            "http://127.0.0.1:1/_matrix/provision/v3/whoami?user_id=%40a%3Ab"
+        );
     }
 
     #[test]
     fn rejects_traversal_and_non_v3() {
-        for bad in ["../admin", "v3/../../_matrix/app/v1/transactions", "v3/%2e%2e/x", "v3/a%2Fb", "debug/pprof", "v3//x", "v3/a\\b"] {
-            assert_eq!(upstream_url(1, bad, None, "@a:b"), Err(ProxyError::BadPath), "{bad}");
+        for bad in [
+            "../admin",
+            "v3/../../_matrix/app/v1/transactions",
+            "v3/%2e%2e/x",
+            "v3/a%2Fb",
+            "debug/pprof",
+            "v3//x",
+            "v3/a\\b",
+        ] {
+            assert_eq!(
+                upstream_url(1, bad, None, "@a:b"),
+                Err(ProxyError::BadPath),
+                "{bad}"
+            );
         }
     }
 

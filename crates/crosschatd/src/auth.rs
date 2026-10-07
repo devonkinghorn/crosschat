@@ -42,7 +42,12 @@ pub struct HomeserverValidator {
 
 impl HomeserverValidator {
     pub fn new(http: reqwest::Client, hs_url: &str) -> Self {
-        Self { http, hs_url: hs_url.trim_end_matches('/').to_string(), ttl: Duration::from_secs(300), cache: Default::default() }
+        Self {
+            http,
+            hs_url: hs_url.trim_end_matches('/').to_string(),
+            ttl: Duration::from_secs(300),
+            cache: Default::default(),
+        }
     }
 }
 
@@ -62,24 +67,45 @@ impl TokenValidator for HomeserverValidator {
                 .send()
                 .await
                 .map_err(|e| AuthError::Upstream(e.to_string()))?;
-            if resp.status() == reqwest::StatusCode::UNAUTHORIZED || resp.status() == reqwest::StatusCode::FORBIDDEN {
+            if resp.status() == reqwest::StatusCode::UNAUTHORIZED
+                || resp.status() == reqwest::StatusCode::FORBIDDEN
+            {
                 return Err(AuthError::Invalid);
             }
-            let body: serde_json::Value = resp.json().await.map_err(|e| AuthError::Upstream(e.to_string()))?;
-            let uid = body.get("user_id").and_then(|v| v.as_str()).ok_or(AuthError::Invalid)?.to_string();
-            self.cache.lock().unwrap().insert(key, (uid.clone(), Instant::now()));
+            let body: serde_json::Value = resp
+                .json()
+                .await
+                .map_err(|e| AuthError::Upstream(e.to_string()))?;
+            let uid = body
+                .get("user_id")
+                .and_then(|v| v.as_str())
+                .ok_or(AuthError::Invalid)?
+                .to_string();
+            self.cache
+                .lock()
+                .unwrap()
+                .insert(key, (uid.clone(), Instant::now()));
             Ok(uid)
         })
     }
 }
 
 /// Decide what a validated user may do.
-pub fn authorize(user_id: &str, auth: &AuthConfig, server_name: &str) -> Result<Principal, AuthError> {
+pub fn authorize(
+    user_id: &str,
+    auth: &AuthConfig,
+    server_name: &str,
+) -> Result<Principal, AuthError> {
     let admin = auth.admins.iter().any(|a| a == user_id);
     // The server part is everything after the *first* colon (it may carry a port).
-    let local = user_id.split_once(':').is_some_and(|(_, s)| s == server_name);
+    let local = user_id
+        .split_once(':')
+        .is_some_and(|(_, s)| s == server_name);
     if admin || (auth.allow_server_users && local) {
-        Ok(Principal { user_id: user_id.to_string(), admin })
+        Ok(Principal {
+            user_id: user_id.to_string(),
+            admin,
+        })
     } else {
         Err(AuthError::Forbidden(user_id.to_string()))
     }
@@ -87,7 +113,11 @@ pub fn authorize(user_id: &str, auth: &AuthConfig, server_name: &str) -> Result<
 
 /// Constant-time-ish string comparison for shared secrets.
 pub fn secret_eq(a: &str, b: &str) -> bool {
-    a.len() == b.len() && a.bytes().zip(b.bytes()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+    a.len() == b.len()
+        && a.bytes()
+            .zip(b.bytes())
+            .fold(0u8, |acc, (x, y)| acc | (x ^ y))
+            == 0
 }
 
 pub fn bearer(headers: &axum::http::HeaderMap) -> Option<&str> {
@@ -105,13 +135,20 @@ mod tests {
     use super::*;
 
     fn cfg(admins: &[&str], server_users: bool) -> AuthConfig {
-        AuthConfig { admins: admins.iter().map(|s| s.to_string()).collect(), allow_server_users: server_users }
+        AuthConfig {
+            admins: admins.iter().map(|s| s.to_string()).collect(),
+            allow_server_users: server_users,
+        }
     }
 
     #[test]
     fn admin_and_server_users() {
         let c = cfg(&["@devon:example.com"], false);
-        assert_eq!(authorize("@devon:example.com", &c, "example.com").unwrap().admin, true);
+        assert!(
+            authorize("@devon:example.com", &c, "example.com")
+                .unwrap()
+                .admin
+        );
         assert!(authorize("@eve:example.com", &c, "example.com").is_err());
         let c = cfg(&["@devon:example.com"], true);
         let p = authorize("@eve:example.com", &c, "example.com").unwrap();

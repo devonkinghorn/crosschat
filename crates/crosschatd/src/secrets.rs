@@ -16,7 +16,11 @@ pub struct BridgeSecrets {
 
 impl BridgeSecrets {
     fn generate() -> Self {
-        Self { tokens: Tokens::generate(), provisioning_secret: random_token(), pickle_key: random_token() }
+        Self {
+            tokens: Tokens::generate(),
+            provisioning_secret: random_token(),
+            pickle_key: random_token(),
+        }
     }
 }
 
@@ -55,7 +59,11 @@ pub fn write_private(path: &Path, contents: &[u8]) -> Result<()> {
 impl Vault {
     pub fn open(path: impl Into<PathBuf>) -> Result<Self> {
         let path = path.into();
-        let data = if path.exists() { serde_json::from_slice(&std::fs::read(&path)?)? } else { VaultData::default() };
+        let data = if path.exists() {
+            serde_json::from_slice(&std::fs::read(&path)?)?
+        } else {
+            VaultData::default()
+        };
         Ok(Self { path, data })
     }
 
@@ -74,7 +82,10 @@ impl Vault {
         Ok(s)
     }
 
-    fn get_or_create(&mut self, f: impl Fn(&mut VaultData) -> &mut Option<String>) -> Result<String> {
+    fn get_or_create(
+        &mut self,
+        f: impl Fn(&mut VaultData) -> &mut Option<String>,
+    ) -> Result<String> {
         if let Some(v) = f(&mut self.data).clone() {
             return Ok(v);
         }

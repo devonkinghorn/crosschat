@@ -88,7 +88,10 @@ fn daemon(port: u16) -> Arc<Daemon> {
         port,
         data_dir: std::env::temp_dir(),
         secrets: BridgeSecrets {
-            tokens: Tokens { as_token: "bridge-as-token".into(), hs_token: "hs".into() },
+            tokens: Tokens {
+                as_token: "bridge-as-token".into(),
+                hs_token: "hs".into(),
+            },
             provisioning_secret: "prov-secret".into(),
             pickle_key: "p".into(),
         },
@@ -110,19 +113,31 @@ fn daemon(port: u16) -> Arc<Daemon> {
     })
 }
 
-async fn call(d: &Arc<Daemon>, method: &str, uri: &str, token: Option<&str>, body: Option<Value>) -> (StatusCode, Value) {
+async fn call(
+    d: &Arc<Daemon>,
+    method: &str,
+    uri: &str,
+    token: Option<&str>,
+    body: Option<Value>,
+) -> (StatusCode, Value) {
     let mut req = Request::builder().method(method).uri(uri);
     if let Some(t) = token {
         req = req.header("authorization", format!("Bearer {t}"));
     }
     let req = match body {
-        Some(b) => req.header("content-type", "application/json").body(Body::from(b.to_string())).unwrap(),
+        Some(b) => req
+            .header("content-type", "application/json")
+            .body(Body::from(b.to_string()))
+            .unwrap(),
         None => req.body(Body::empty()).unwrap(),
     };
     let resp = api::router(d.clone()).oneshot(req).await.unwrap();
     let status = resp.status();
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
-    (status, serde_json::from_slice(&bytes).unwrap_or(Value::Null))
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
 }
 
 #[tokio::test]
@@ -138,11 +153,20 @@ async fn provisioning_requires_valid_allowed_token() {
     let seen: Seen = Default::default();
     let d = daemon(fake_bridge(seen.clone()).await);
     let uri = "/_crosschat/v1/bridges/slack/provision/v3/login/flows";
-    assert_eq!(call(&d, "GET", uri, None, None).await.0, StatusCode::UNAUTHORIZED);
-    assert_eq!(call(&d, "GET", uri, Some("garbage"), None).await.0, StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        call(&d, "GET", uri, None, None).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        call(&d, "GET", uri, Some("garbage"), None).await.0,
+        StatusCode::UNAUTHORIZED
+    );
     let (s, v) = call(&d, "GET", uri, Some("eve-token"), None).await;
     assert_eq!(s, StatusCode::FORBIDDEN, "{v}");
-    assert!(seen.lock().unwrap().is_empty(), "rejected requests never reach the bridge");
+    assert!(
+        seen.lock().unwrap().is_empty(),
+        "rejected requests never reach the bridge"
+    );
 }
 
 #[tokio::test]
@@ -168,12 +192,33 @@ async fn provisioning_proxy_forwards_with_shared_secret_and_forced_user() {
 #[tokio::test]
 async fn proxy_rejects_bad_paths_and_unknown_bridges() {
     let d = daemon(1);
-    let (s, _) = call(&d, "GET", "/_crosschat/v1/bridges/slack/provision/v3/%2e%2e/x", Some("devon-token"), None).await;
+    let (s, _) = call(
+        &d,
+        "GET",
+        "/_crosschat/v1/bridges/slack/provision/v3/%2e%2e/x",
+        Some("devon-token"),
+        None,
+    )
+    .await;
     assert_eq!(s, StatusCode::BAD_REQUEST);
-    let (s, _) = call(&d, "GET", "/_crosschat/v1/bridges/whatsapp/provision/v3/whoami", Some("devon-token"), None).await;
+    let (s, _) = call(
+        &d,
+        "GET",
+        "/_crosschat/v1/bridges/whatsapp/provision/v3/whoami",
+        Some("devon-token"),
+        None,
+    )
+    .await;
     assert_eq!(s, StatusCode::NOT_FOUND);
     // Bridge not listening -> 503, not a hang.
-    let (s, v) = call(&d, "GET", "/_crosschat/v1/bridges/slack/provision/v3/whoami", Some("devon-token"), None).await;
+    let (s, v) = call(
+        &d,
+        "GET",
+        "/_crosschat/v1/bridges/slack/provision/v3/whoami",
+        Some("devon-token"),
+        None,
+    )
+    .await;
     assert_eq!(s, StatusCode::SERVICE_UNAVAILABLE, "{v}");
     assert_eq!(v["errcode"], "CC_BRIDGE_UNAVAILABLE");
 }
@@ -182,7 +227,14 @@ async fn proxy_rejects_bad_paths_and_unknown_bridges() {
 async fn search_fans_out_and_resolves_phone_numbers() {
     let seen: Seen = Default::default();
     let d = daemon(fake_bridge(seen.clone()).await);
-    let (s, v) = call(&d, "POST", "/_crosschat/v1/search", Some("devon-token"), Some(json!({"query": "+18015551234"}))).await;
+    let (s, v) = call(
+        &d,
+        "POST",
+        "/_crosschat/v1/search",
+        Some("devon-token"),
+        Some(json!({"query": "+18015551234"})),
+    )
+    .await;
     assert_eq!(s, StatusCode::OK, "{v}");
     let results = v["results"].as_array().unwrap();
     assert_eq!(results.len(), 2, "{v}");
@@ -195,7 +247,14 @@ async fn search_fans_out_and_resolves_phone_numbers() {
 #[tokio::test]
 async fn networks_lists_all_manifests() {
     let d = daemon(1);
-    let (s, v) = call(&d, "GET", "/_crosschat/v1/networks", Some("devon-token"), None).await;
+    let (s, v) = call(
+        &d,
+        "GET",
+        "/_crosschat/v1/networks",
+        Some("devon-token"),
+        None,
+    )
+    .await;
     assert_eq!(s, StatusCode::OK);
     assert_eq!(v["admin"], true);
     let bridges = v["bridges"].as_array().unwrap();
@@ -206,17 +265,30 @@ async fn networks_lists_all_manifests() {
     assert_eq!(slack["capabilities"]["threads"], "yes");
     let imessage = bridges.iter().find(|b| b["id"] == "imessage").unwrap();
     assert_eq!(imessage["enabled"], false);
-    assert!(imessage["preflight"].as_array().unwrap().iter().any(|p| p["id"] == "contact_key_verification"));
+    assert!(
+        imessage["preflight"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|p| p["id"] == "contact_key_verification")
+    );
 }
 
 #[tokio::test]
 async fn admin_actions_need_admin() {
     let d = daemon(1);
     // Admin token works for logs even with no process.
-    let (s, v) = call(&d, "GET", "/_crosschat/v1/bridges/slack/logs", Some("admin-secret"), None).await;
+    let (s, v) = call(
+        &d,
+        "GET",
+        "/_crosschat/v1/bridges/slack/logs",
+        Some("admin-secret"),
+        None,
+    )
+    .await;
     assert_eq!(s, StatusCode::OK, "{v}");
     // A non-admin local user can't restart bridges.
-    let mut cfg_d = (*d).cfg.clone();
+    let mut cfg_d = d.cfg.clone();
     cfg_d.auth.allow_server_users = true;
     cfg_d.auth.admins.clear();
     let d2 = Arc::new(Daemon {
@@ -228,7 +300,14 @@ async fn admin_actions_need_admin() {
         http: reqwest::Client::new(),
         homeserver: Mutex::new(None),
     });
-    let (s, _) = call(&d2, "POST", "/_crosschat/v1/bridges/slack/restart", Some("devon-token"), None).await;
+    let (s, _) = call(
+        &d2,
+        "POST",
+        "/_crosschat/v1/bridges/slack/restart",
+        Some("devon-token"),
+        None,
+    )
+    .await;
     assert_eq!(s, StatusCode::FORBIDDEN);
 }
 
@@ -236,9 +315,26 @@ async fn admin_actions_need_admin() {
 async fn bridge_status_endpoint_checks_as_token() {
     let d = daemon(1);
     let body = json!({"remoteState": {}, "bridgeState": {"state_event": "RUNNING"}});
-    let (s, _) = call(&d, "POST", "/_crosschat/internal/bridge-status/slack", Some("wrong"), Some(body.clone())).await;
+    let (s, _) = call(
+        &d,
+        "POST",
+        "/_crosschat/internal/bridge-status/slack",
+        Some("wrong"),
+        Some(body.clone()),
+    )
+    .await;
     assert_eq!(s, StatusCode::UNAUTHORIZED);
-    let (s, _) = call(&d, "POST", "/_crosschat/internal/bridge-status/slack", Some("bridge-as-token"), Some(body.clone())).await;
+    let (s, _) = call(
+        &d,
+        "POST",
+        "/_crosschat/internal/bridge-status/slack",
+        Some("bridge-as-token"),
+        Some(body.clone()),
+    )
+    .await;
     assert_eq!(s, StatusCode::OK);
-    assert_eq!(d.bridges["slack"].remote_state.lock().unwrap().as_ref(), Some(&body));
+    assert_eq!(
+        d.bridges["slack"].remote_state.lock().unwrap().as_ref(),
+        Some(&body)
+    );
 }

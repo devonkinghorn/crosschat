@@ -33,10 +33,20 @@ impl IntoResponse for ApiError {
 impl From<AuthError> for ApiError {
     fn from(e: AuthError) -> Self {
         match e {
-            AuthError::Missing => ApiError(StatusCode::UNAUTHORIZED, "M_MISSING_TOKEN", e.to_string()),
-            AuthError::Invalid => ApiError(StatusCode::UNAUTHORIZED, "M_UNKNOWN_TOKEN", e.to_string()),
-            AuthError::Forbidden(_) => ApiError(StatusCode::FORBIDDEN, "M_FORBIDDEN", e.to_string()),
-            AuthError::Upstream(_) => ApiError(StatusCode::BAD_GATEWAY, "CC_HOMESERVER_UNREACHABLE", e.to_string()),
+            AuthError::Missing => {
+                ApiError(StatusCode::UNAUTHORIZED, "M_MISSING_TOKEN", e.to_string())
+            }
+            AuthError::Invalid => {
+                ApiError(StatusCode::UNAUTHORIZED, "M_UNKNOWN_TOKEN", e.to_string())
+            }
+            AuthError::Forbidden(_) => {
+                ApiError(StatusCode::FORBIDDEN, "M_FORBIDDEN", e.to_string())
+            }
+            AuthError::Upstream(_) => ApiError(
+                StatusCode::BAD_GATEWAY,
+                "CC_HOMESERVER_UNREACHABLE",
+                e.to_string(),
+            ),
         }
     }
 }
@@ -49,9 +59,15 @@ pub fn router(state: AppState) -> Router {
         .route("/_crosschat/v1/search", post(search))
         .route("/_crosschat/v1/contacts", get(contacts))
         .route("/_crosschat/v1/bridges/{id}/logs", get(logs))
-        .route("/_crosschat/v1/bridges/{id}/provision/{*rest}", any(provision))
+        .route(
+            "/_crosschat/v1/bridges/{id}/provision/{*rest}",
+            any(provision),
+        )
         .route("/_crosschat/v1/bridges/{id}/{action}", post(bridge_action))
-        .route("/_crosschat/internal/bridge-status/{id}", post(bridge_status))
+        .route(
+            "/_crosschat/internal/bridge-status/{id}",
+            post(bridge_status),
+        )
         .with_state(state)
 }
 
@@ -65,27 +81,45 @@ async fn principal(d: &Daemon, headers: &HeaderMap) -> Result<Principal, ApiErro
             .first()
             .cloned()
             .unwrap_or_else(|| format!("@crosschatd:{}", d.cfg.homeserver.server_name));
-        return Ok(Principal { user_id, admin: true });
+        return Ok(Principal {
+            user_id,
+            admin: true,
+        });
     }
     let uid = d.validator.whoami(token).await?;
     Ok(authorize(&uid, &d.cfg.auth, &d.cfg.homeserver.server_name)?)
 }
 
 fn require_admin(p: &Principal) -> Result<(), ApiError> {
-    if p.admin { Ok(()) } else { Err(ApiError(StatusCode::FORBIDDEN, "M_FORBIDDEN", "admin only".into())) }
+    if p.admin {
+        Ok(())
+    } else {
+        Err(ApiError(
+            StatusCode::FORBIDDEN,
+            "M_FORBIDDEN",
+            "admin only".into(),
+        ))
+    }
 }
 
 fn find_bridge<'a>(d: &'a Daemon, id: &str) -> Result<&'a Arc<BridgeRuntime>, ApiError> {
-    d.bridges
-        .get(id)
-        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "M_NOT_FOUND", format!("bridge `{id}` is not enabled")))
+    d.bridges.get(id).ok_or_else(|| {
+        ApiError(
+            StatusCode::NOT_FOUND,
+            "M_NOT_FOUND",
+            format!("bridge `{id}` is not enabled"),
+        )
+    })
 }
 
 async fn health() -> Json<Value> {
     Json(json!({"status": "ok", "version": env!("CARGO_PKG_VERSION")}))
 }
 
-async fn whoami(State(d): State<AppState>, headers: HeaderMap) -> Result<Json<Principal>, ApiError> {
+async fn whoami(
+    State(d): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<Principal>, ApiError> {
     Ok(Json(principal(&d, &headers).await?))
 }
 
@@ -136,14 +170,24 @@ async fn bridge_action(
 ) -> Result<Json<Value>, ApiError> {
     require_admin(&principal(&d, &headers).await?)?;
     let rt = find_bridge(&d, &id)?;
-    let h = rt
-        .handle()
-        .ok_or_else(|| ApiError(StatusCode::CONFLICT, "CC_NOT_INSTALLED", "bridge failed setup; see setup_error".into()))?;
+    let h = rt.handle().ok_or_else(|| {
+        ApiError(
+            StatusCode::CONFLICT,
+            "CC_NOT_INSTALLED",
+            "bridge failed setup; see setup_error".into(),
+        )
+    })?;
     match action.as_str() {
         "start" => h.start(),
         "stop" => h.stop(),
         "restart" => h.restart(),
-        _ => return Err(ApiError(StatusCode::NOT_FOUND, "M_UNRECOGNIZED", format!("unknown action `{action}`"))),
+        _ => {
+            return Err(ApiError(
+                StatusCode::NOT_FOUND,
+                "M_UNRECOGNIZED",
+                format!("unknown action `{action}`"),
+            ));
+        }
     }
     Ok(Json(json!({"ok": true})))
 }
@@ -161,7 +205,10 @@ async fn logs(
 ) -> Result<Json<Value>, ApiError> {
     require_admin(&principal(&d, &headers).await?)?;
     let rt = find_bridge(&d, &id)?;
-    let lines = rt.handle().map(|h| h.logs(q.lines.unwrap_or(200).min(1000))).unwrap_or_default();
+    let lines = rt
+        .handle()
+        .map(|h| h.logs(q.lines.unwrap_or(200).min(1000)))
+        .unwrap_or_default();
     Ok(Json(json!({"lines": lines})))
 }
 
@@ -174,7 +221,11 @@ async fn bridge_status(
     let rt = find_bridge(&d, &id)?;
     let ok = bearer(&headers).is_some_and(|t| secret_eq(t, &rt.secrets.tokens.as_token));
     if !ok {
-        return Err(ApiError(StatusCode::UNAUTHORIZED, "M_UNKNOWN_TOKEN", "bad bridge token".into()));
+        return Err(ApiError(
+            StatusCode::UNAUTHORIZED,
+            "M_UNKNOWN_TOKEN",
+            "bad bridge token".into(),
+        ));
     }
     *rt.remote_state.lock().unwrap() = Some(body);
     Ok(Json(json!({})))
@@ -203,14 +254,21 @@ async fn provision(
         req = req.header(header::CONTENT_TYPE, ct.clone());
     }
     let resp = req.send().await.map_err(|e| {
-        ApiError(StatusCode::SERVICE_UNAVAILABLE, "CC_BRIDGE_UNAVAILABLE", format!("bridge `{id}` unreachable: {e}"))
+        ApiError(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "CC_BRIDGE_UNAVAILABLE",
+            format!("bridge `{id}` unreachable: {e}"),
+        )
     })?;
     let status = StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
     let ct = resp.headers().get(header::CONTENT_TYPE).cloned();
-    let bytes = resp
-        .bytes()
-        .await
-        .map_err(|e| ApiError(StatusCode::BAD_GATEWAY, "CC_BRIDGE_UNAVAILABLE", e.to_string()))?;
+    let bytes = resp.bytes().await.map_err(|e| {
+        ApiError(
+            StatusCode::BAD_GATEWAY,
+            "CC_BRIDGE_UNAVAILABLE",
+            e.to_string(),
+        )
+    })?;
     let mut out = Response::builder().status(status);
     if let Some(ct) = ct {
         out = out.header(header::CONTENT_TYPE, ct);
@@ -223,9 +281,20 @@ struct SearchBody {
     query: String,
 }
 
-async fn call_bridge(d: &Daemon, rt: &BridgeRuntime, method: reqwest::Method, rest: &str, user: &str, body: Option<Value>) -> Result<Value, String> {
+async fn call_bridge(
+    d: &Daemon,
+    rt: &BridgeRuntime,
+    method: reqwest::Method,
+    rest: &str,
+    user: &str,
+    body: Option<Value>,
+) -> Result<Value, String> {
     let url = proxy::upstream_url(rt.port, rest, None, user).map_err(|e| e.to_string())?;
-    let mut req = d.http.request(method, url).bearer_auth(&rt.secrets.provisioning_secret).timeout(Duration::from_secs(8));
+    let mut req = d
+        .http
+        .request(method, url)
+        .bearer_auth(&rt.secrets.provisioning_secret)
+        .timeout(Duration::from_secs(8));
     if let Some(b) = body {
         req = req.json(&b);
     }
@@ -235,35 +304,73 @@ async fn call_bridge(d: &Daemon, rt: &BridgeRuntime, method: reqwest::Method, re
     if status.is_success() {
         Ok(v)
     } else {
-        Err(v.get("error").and_then(Value::as_str).map(str::to_owned).unwrap_or_else(|| format!("HTTP {status}")))
+        Err(v
+            .get("error")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .unwrap_or_else(|| format!("HTTP {status}")))
     }
 }
 
 /// Fan a contact search out to every enabled bridge that supports it.
-async fn search(State(d): State<AppState>, headers: HeaderMap, Json(body): Json<SearchBody>) -> Result<Json<Value>, ApiError> {
+async fn search(
+    State(d): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<SearchBody>,
+) -> Result<Json<Value>, ApiError> {
     let p = principal(&d, &headers).await?;
     let q = body.query.trim().to_string();
-    let futures = d.bridges.values().filter(|rt| rt.manifest.capabilities.search_users != Support::No).map(|rt| {
-        let (d, p, q) = (d.clone(), p.clone(), q.clone());
-        async move {
-            let mut results: Vec<ContactResult> = Vec::new();
-            let mut err = None;
-            match call_bridge(&d, rt, reqwest::Method::POST, "v3/search_users", &p.user_id, Some(json!({"query": q}))).await {
-                Ok(v) => {
-                    let items = v.get("results").and_then(Value::as_array).cloned().unwrap_or_default();
-                    results.extend(proxy::tag_results(&rt.manifest.id, &rt.manifest.network, &items));
+    let futures = d
+        .bridges
+        .values()
+        .filter(|rt| rt.manifest.capabilities.search_users != Support::No)
+        .map(|rt| {
+            let (d, p, q) = (d.clone(), p.clone(), q.clone());
+            async move {
+                let mut results: Vec<ContactResult> = Vec::new();
+                let mut err = None;
+                match call_bridge(
+                    &d,
+                    rt,
+                    reqwest::Method::POST,
+                    "v3/search_users",
+                    &p.user_id,
+                    Some(json!({"query": q})),
+                )
+                .await
+                {
+                    Ok(v) => {
+                        let items = v
+                            .get("results")
+                            .and_then(Value::as_array)
+                            .cloned()
+                            .unwrap_or_default();
+                        results.extend(proxy::tag_results(
+                            &rt.manifest.id,
+                            &rt.manifest.network,
+                            &items,
+                        ));
+                    }
+                    Err(e) => err = Some(e),
                 }
-                Err(e) => err = Some(e),
-            }
-            if proxy::looks_like_identifier(&q) {
-                let path = format!("v3/resolve_identifier/{}", url::form_urlencoded::byte_serialize(q.as_bytes()).collect::<String>());
-                if let Ok(v) = call_bridge(&d, rt, reqwest::Method::GET, &path, &p.user_id, None).await {
-                    results.extend(proxy::tag_results(&rt.manifest.id, &rt.manifest.network, &[v]));
+                if proxy::looks_like_identifier(&q) {
+                    let path = format!(
+                        "v3/resolve_identifier/{}",
+                        url::form_urlencoded::byte_serialize(q.as_bytes()).collect::<String>()
+                    );
+                    if let Ok(v) =
+                        call_bridge(&d, rt, reqwest::Method::GET, &path, &p.user_id, None).await
+                    {
+                        results.extend(proxy::tag_results(
+                            &rt.manifest.id,
+                            &rt.manifest.network,
+                            &[v],
+                        ));
+                    }
                 }
+                (rt.manifest.id.clone(), results, err)
             }
-            (rt.manifest.id.clone(), results, err)
-        }
-    });
+        });
     let mut all = Vec::new();
     let mut errors = BTreeMap::new();
     for (id, results, err) in futures::future::join_all(futures).await {
@@ -272,7 +379,9 @@ async fn search(State(d): State<AppState>, headers: HeaderMap, Json(body): Json<
             errors.insert(id, e);
         }
     }
-    Ok(Json(json!({"results": proxy::merge_results(all), "errors": errors})))
+    Ok(Json(
+        json!({"results": proxy::merge_results(all), "errors": errors}),
+    ))
 }
 
 #[derive(Deserialize)]
@@ -280,12 +389,29 @@ struct ContactsQuery {
     bridge: String,
 }
 
-async fn contacts(State(d): State<AppState>, headers: HeaderMap, Query(q): Query<ContactsQuery>) -> Result<Json<Value>, ApiError> {
+async fn contacts(
+    State(d): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<ContactsQuery>,
+) -> Result<Json<Value>, ApiError> {
     let p = principal(&d, &headers).await?;
     let rt = find_bridge(&d, &q.bridge)?;
-    let v = call_bridge(&d, rt, reqwest::Method::GET, "v3/contacts", &p.user_id, None)
-        .await
-        .map_err(|e| ApiError(StatusCode::BAD_GATEWAY, "CC_BRIDGE_ERROR", e))?;
-    let items = v.get("contacts").and_then(Value::as_array).cloned().unwrap_or_default();
-    Ok(Json(json!({"contacts": proxy::tag_results(&rt.manifest.id, &rt.manifest.network, &items)})))
+    let v = call_bridge(
+        &d,
+        rt,
+        reqwest::Method::GET,
+        "v3/contacts",
+        &p.user_id,
+        None,
+    )
+    .await
+    .map_err(|e| ApiError(StatusCode::BAD_GATEWAY, "CC_BRIDGE_ERROR", e))?;
+    let items = v
+        .get("contacts")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    Ok(Json(
+        json!({"contacts": proxy::tag_results(&rt.manifest.id, &rt.manifest.network, &items)}),
+    ))
 }

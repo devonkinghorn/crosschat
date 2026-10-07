@@ -257,9 +257,15 @@ impl Default for HealthSpec {
 #[derive(Debug, thiserror::Error)]
 pub enum ManifestError {
     #[error("io error reading {path}: {source}")]
-    Io { path: String, source: std::io::Error },
+    Io {
+        path: String,
+        source: std::io::Error,
+    },
     #[error("parse error in {path}: {source}")]
-    Parse { path: String, source: serde_yaml_ng::Error },
+    Parse {
+        path: String,
+        source: serde_yaml_ng::Error,
+    },
     #[error("invalid manifest {id}: {problems:?}")]
     Invalid { id: String, problems: Vec<String> },
 }
@@ -280,33 +286,40 @@ pub fn current_platform() -> String {
 }
 
 pub fn current_host_os() -> &'static str {
-    match std::env::consts::OS {
-        "macos" => "macos",
-        other => other,
-    }
+    std::env::consts::OS
 }
 
 impl Manifest {
     pub fn from_yaml(text: &str, path: &str) -> Result<Self, ManifestError> {
-        let m: Manifest = serde_yaml_ng::from_str(text)
-            .map_err(|source| ManifestError::Parse { path: path.to_string(), source })?;
+        let m: Manifest = serde_yaml_ng::from_str(text).map_err(|source| ManifestError::Parse {
+            path: path.to_string(),
+            source,
+        })?;
         let problems = m.validate();
         if problems.is_empty() {
             Ok(m)
         } else {
-            Err(ManifestError::Invalid { id: m.id.clone(), problems })
+            Err(ManifestError::Invalid {
+                id: m.id.clone(),
+                problems,
+            })
         }
     }
 
     pub fn load(path: &Path) -> Result<Self, ManifestError> {
-        let text = std::fs::read_to_string(path)
-            .map_err(|source| ManifestError::Io { path: path.display().to_string(), source })?;
+        let text = std::fs::read_to_string(path).map_err(|source| ManifestError::Io {
+            path: path.display().to_string(),
+            source,
+        })?;
         Self::from_yaml(&text, &path.display().to_string())
     }
 
     /// Load every `*.yaml` / `*.yml` manifest in a directory, sorted by id.
     pub fn load_dir(dir: &Path) -> Result<Vec<Self>, ManifestError> {
-        let rd = std::fs::read_dir(dir).map_err(|source| ManifestError::Io { path: dir.display().to_string(), source })?;
+        let rd = std::fs::read_dir(dir).map_err(|source| ManifestError::Io {
+            path: dir.display().to_string(),
+            source,
+        })?;
         let mut out = Vec::new();
         for entry in rd.flatten() {
             let p = entry.path();
@@ -322,7 +335,10 @@ impl Manifest {
     pub fn validate(&self) -> Vec<String> {
         let mut p = Vec::new();
         if self.schema != SCHEMA_V1 {
-            p.push(format!("schema must be `{SCHEMA_V1}`, got `{}`", self.schema));
+            p.push(format!(
+                "schema must be `{SCHEMA_V1}`, got `{}`",
+                self.schema
+            ));
         }
         if !ID_RE.is_match(&self.id) {
             p.push(format!("id `{}` must match {}", self.id, ID_RE.as_str()));
@@ -342,7 +358,13 @@ impl Manifest {
             }
         }
         match &self.source {
-            Source::GithubRelease { repo, version, artifacts, sha256, .. } => {
+            Source::GithubRelease {
+                repo,
+                version,
+                artifacts,
+                sha256,
+                ..
+            } => {
                 if repo.split('/').count() != 2 {
                     p.push(format!("source.repo `{repo}` must be `owner/name`"));
                 }
@@ -358,7 +380,9 @@ impl Manifest {
                     }
                 }
             }
-            Source::GoBuild { repo, rev, package, .. } => {
+            Source::GoBuild {
+                repo, rev, package, ..
+            } => {
                 if !repo.starts_with("https://") {
                     p.push("source.repo for go-build must be an https git URL".into());
                 }
@@ -381,7 +405,10 @@ impl Manifest {
         }
         let r = &self.registration;
         if !LOCALPART_RE.is_match(&r.bot_username) {
-            p.push(format!("registration.bot_username `{}` is not a valid localpart", r.bot_username));
+            p.push(format!(
+                "registration.bot_username `{}` is not a valid localpart",
+                r.bot_username
+            ));
         }
         if r.username_template.matches("{{.}}").count() != 1 {
             p.push("registration.username_template must contain `{{.}}` exactly once".into());
@@ -396,7 +423,10 @@ impl Manifest {
         }
         for req in &self.requirements {
             if req.provided_by.is_empty() {
-                p.push(format!("requirement `{}` has no provided_by platforms", req.id));
+                p.push(format!(
+                    "requirement `{}` has no provided_by platforms",
+                    req.id
+                ));
             }
         }
         p
@@ -405,10 +435,17 @@ impl Manifest {
     /// Artifact file name for a platform key, falling back to a macOS
     /// universal binary on any darwin architecture.
     pub fn artifact_for(&self, platform: &str) -> Option<&str> {
-        let Source::GithubRelease { artifacts, .. } = &self.source else { return None };
+        let Source::GithubRelease { artifacts, .. } = &self.source else {
+            return None;
+        };
         artifacts
             .get(platform)
-            .or_else(|| platform.starts_with("darwin-").then(|| artifacts.get("darwin-universal")).flatten())
+            .or_else(|| {
+                platform
+                    .starts_with("darwin-")
+                    .then(|| artifacts.get("darwin-universal"))
+                    .flatten()
+            })
             .map(String::as_str)
     }
 
@@ -425,7 +462,11 @@ impl Manifest {
     }
 
     pub fn ghost_prefix(&self) -> &str {
-        self.registration.username_template.split("{{.}}").next().unwrap_or("")
+        self.registration
+            .username_template
+            .split("{{.}}")
+            .next()
+            .unwrap_or("")
     }
 }
 
@@ -472,7 +513,10 @@ requirements:
         assert_eq!(m.capabilities.threads, Support::No);
         assert_eq!(m.capabilities.reactions, Support::Unknown);
         assert_eq!(m.health.liveness, "/_matrix/mau/live");
-        assert_eq!(m.artifact_for("linux-amd64"), Some("mautrix-gmessages-amd64"));
+        assert_eq!(
+            m.artifact_for("linux-amd64"),
+            Some("mautrix-gmessages-amd64")
+        );
         assert_eq!(m.artifact_for("linux-arm64"), None);
         assert_eq!(m.ghost_prefix(), "gmessages_");
         assert_eq!(m.requirements_for_host("linux").len(), 1);
@@ -483,7 +527,10 @@ requirements:
     #[test]
     fn rejects_unknown_fields() {
         let bad = GOOD.replace("license: AGPL-3.0", "license: AGPL-3.0\nsurprise: 1");
-        assert!(matches!(Manifest::from_yaml(&bad, "t"), Err(ManifestError::Parse { .. })));
+        assert!(matches!(
+            Manifest::from_yaml(&bad, "t"),
+            Err(ManifestError::Parse { .. })
+        ));
     }
 
     #[test]
@@ -508,7 +555,10 @@ requirements:
     #[test]
     fn darwin_universal_fallback() {
         let m = Manifest::from_yaml(
-            &GOOD.replace("darwin-arm64: mautrix-gmessages-darwin-arm64", "darwin-universal: uni"),
+            &GOOD.replace(
+                "darwin-arm64: mautrix-gmessages-darwin-arm64",
+                "darwin-universal: uni",
+            ),
             "t",
         )
         .unwrap();

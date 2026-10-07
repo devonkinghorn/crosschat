@@ -7,3 +7,4 @@ vault.json
 session.json
 .env
 /smoke/
+/smoke*/

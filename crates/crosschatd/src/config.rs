@@ -121,7 +121,8 @@ impl Config {
     }
 
     pub fn load(path: &Path) -> Result<Self> {
-        let text = std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+        let text =
+            std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
         let mut cfg = Self::from_toml(&text)?;
         // Relative paths are relative to the config file.
         let base = path.parent().unwrap_or(Path::new("."));
@@ -143,7 +144,10 @@ impl Config {
         }
         if let Some(b) = &self.homeserver.bundled {
             if b.implementation != "tuwunel" {
-                bail!("bundled homeserver `{}` is not supported yet (only tuwunel)", b.implementation);
+                bail!(
+                    "bundled homeserver `{}` is not supported yet (only tuwunel)",
+                    b.implementation
+                );
             }
             if b.federation.is_none() {
                 bail!(
@@ -161,7 +165,9 @@ impl Config {
     }
 
     pub fn internal_url(&self) -> String {
-        self.internal_url.clone().unwrap_or_else(|| format!("http://{}", self.listen))
+        self.internal_url
+            .clone()
+            .unwrap_or_else(|| format!("http://{}", self.listen))
     }
 
     pub fn registrations_dir(&self) -> PathBuf {

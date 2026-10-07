@@ -87,6 +87,8 @@ pub struct UserResult {
 }
 
 /// Events pushed to the UI as sync progresses.
+// Messages dominate the event stream, so boxing them buys nothing.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum CoreEvent {
     /// Room list changed (new room, new message, unread counts...).
@@ -144,13 +146,17 @@ pub fn parse_event(raw: &Value, own_user: &str) -> Option<Message> {
     }
     let event_id = raw.get("event_id")?.as_str()?.to_owned();
     let sender = raw.get("sender")?.as_str()?.to_owned();
-    let ts = raw.get("origin_server_ts").and_then(Value::as_i64).unwrap_or(0);
+    let ts = raw
+        .get("origin_server_ts")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
     let empty = Value::Object(Default::default());
     let content = raw.get("content").unwrap_or(&empty);
     let unsigned = raw.get("unsigned");
 
     let redacted = unsigned.and_then(|u| u.get("redacted_because")).is_some()
-        || (matches!(ty, "m.room.message" | "m.sticker") && content.as_object().is_some_and(|o| o.is_empty()));
+        || (matches!(ty, "m.room.message" | "m.sticker")
+            && content.as_object().is_some_and(|o| o.is_empty()));
 
     let (kind, body) = match ty {
         _ if redacted => (MessageKind::Redacted, "Message deleted".to_owned()),
@@ -158,7 +164,11 @@ pub fn parse_event(raw: &Value, own_user: &str) -> Option<Message> {
             if relation(content).is_some_and(|(t, _)| t == "m.replace") {
                 return None; // edits are folded into their target by the caller
             }
-            let body = content.get("body").and_then(Value::as_str).unwrap_or("").to_owned();
+            let body = content
+                .get("body")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_owned();
             let kind = match content.get("msgtype").and_then(Value::as_str).unwrap_or("") {
                 "m.text" => MessageKind::Text,
                 "m.notice" => MessageKind::Notice,
@@ -169,14 +179,25 @@ pub fn parse_event(raw: &Value, own_user: &str) -> Option<Message> {
                 "m.audio" => MessageKind::Audio,
                 _ => MessageKind::Other,
             };
-            let body = if in_reply_to(content).is_some() { strip_reply_fallback(&body) } else { body };
+            let body = if in_reply_to(content).is_some() {
+                strip_reply_fallback(&body)
+            } else {
+                body
+            };
             (kind, body)
         }
         "m.sticker" => (
             MessageKind::Sticker,
-            content.get("body").and_then(Value::as_str).unwrap_or("Sticker").to_owned(),
+            content
+                .get("body")
+                .and_then(Value::as_str)
+                .unwrap_or("Sticker")
+                .to_owned(),
         ),
-        "m.room.encrypted" => (MessageKind::Undecryptable, "Unable to decrypt message".to_owned()),
+        "m.room.encrypted" => (
+            MessageKind::Undecryptable,
+            "Unable to decrypt message".to_owned(),
+        ),
         _ => return None,
     };
 
@@ -188,7 +209,14 @@ pub fn parse_event(raw: &Value, own_user: &str) -> Option<Message> {
                 .and_then(|r| r.get("is_falling_back"))
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
-            (Some(root), if falling_back { None } else { in_reply_to(content) })
+            (
+                Some(root),
+                if falling_back {
+                    None
+                } else {
+                    in_reply_to(content)
+                },
+            )
         }
         _ => (None, in_reply_to(content)),
     };
@@ -200,7 +228,9 @@ pub fn parse_event(raw: &Value, own_user: &str) -> Option<Message> {
             let latest = t.get("latest_event");
             ThreadSummary {
                 reply_count: t.get("count").and_then(Value::as_u64).unwrap_or(0) as u32,
-                latest_reply_ts: latest.and_then(|l| l.get("origin_server_ts")).and_then(Value::as_i64),
+                latest_reply_ts: latest
+                    .and_then(|l| l.get("origin_server_ts"))
+                    .and_then(Value::as_i64),
                 latest_reply_body: latest
                     .and_then(|l| l.get("content"))
                     .and_then(|c| c.get("body"))
@@ -241,7 +271,11 @@ pub fn parse_edit(raw: &Value) -> Option<(String, String)> {
     if t != "m.replace" {
         return None;
     }
-    let body = content.get("m.new_content")?.get("body")?.as_str()?.to_owned();
+    let body = content
+        .get("m.new_content")?
+        .get("body")?
+        .as_str()?
+        .to_owned();
     Some((target, body))
 }
 
@@ -259,7 +293,9 @@ pub fn build_main_timeline(raw_events: &[Value], own_user: &str) -> Vec<Message>
     let mut main: Vec<Message> = Vec::new();
     let mut replies: BTreeMap<String, Vec<Message>> = BTreeMap::new();
     for ev in raw_events {
-        let Some(mut msg) = parse_event(ev, own_user) else { continue };
+        let Some(mut msg) = parse_event(ev, own_user) else {
+            continue;
+        };
         if let Some(body) = edits.get(&msg.event_id) {
             msg.body = body.clone();
             msg.edited = true;
@@ -271,7 +307,9 @@ pub fn build_main_timeline(raw_events: &[Value], own_user: &str) -> Vec<Message>
     }
 
     for msg in &mut main {
-        let Some(seen) = replies.get(&msg.event_id) else { continue };
+        let Some(seen) = replies.get(&msg.event_id) else {
+            continue;
+        };
         let summary = msg.thread.get_or_insert_with(ThreadSummary::default);
         summary.reply_count = summary.reply_count.max(seen.len() as u32);
         if let Some(last) = seen.iter().max_by_key(|m| m.ts)
@@ -309,7 +347,10 @@ pub fn parse_bridge_state(content: &Value) -> Option<NetworkInfo> {
     Some(NetworkInfo {
         id,
         display_name,
-        bridge_bot: content.get("bridgebot").and_then(Value::as_str).map(str::to_owned),
+        bridge_bot: content
+            .get("bridgebot")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
     })
 }
 
@@ -325,7 +366,9 @@ pub fn threads_supported_from_features(content: &Value) -> Option<bool> {
 }
 
 /// Fallback network detection from member MXIDs, using known ghost prefixes.
-pub fn guess_network_from_members<'a>(members: impl IntoIterator<Item = &'a str>) -> Option<NetworkInfo> {
+pub fn guess_network_from_members<'a>(
+    members: impl IntoIterator<Item = &'a str>,
+) -> Option<NetworkInfo> {
     const KNOWN: &[(&str, &str, &str)] = &[
         ("@imessage_", "imessage", "iMessage"),
         ("@gmessages_", "gmessages", "Google Messages"),
@@ -338,7 +381,11 @@ pub fn guess_network_from_members<'a>(members: impl IntoIterator<Item = &'a str>
     for m in members {
         for (prefix, id, name) in KNOWN {
             if m.starts_with(prefix) {
-                return Some(NetworkInfo { id: (*id).into(), display_name: (*name).into(), bridge_bot: None });
+                return Some(NetworkInfo {
+                    id: (*id).into(),
+                    display_name: (*name).into(),
+                    bridge_bot: None,
+                });
             }
         }
     }
@@ -399,7 +446,10 @@ mod tests {
         let s = tl[0].thread.as_ref().unwrap();
         assert_eq!(s.reply_count, 2);
         assert_eq!(s.latest_reply_body.as_deref(), Some("me too"));
-        assert_eq!(s.participants, vec!["@carol:x".to_string(), "@bob:x".to_string()]);
+        assert_eq!(
+            s.participants,
+            vec!["@carol:x".to_string(), "@bob:x".to_string()]
+        );
         assert!(tl[1].thread.is_none());
     }
 
@@ -428,7 +478,10 @@ mod tests {
 
     #[test]
     fn strips_rich_reply_fallback() {
-        assert_eq!(strip_reply_fallback("> <@a:x> hello\n> more\n\nreal reply"), "real reply");
+        assert_eq!(
+            strip_reply_fallback("> <@a:x> hello\n> more\n\nreal reply"),
+            "real reply"
+        );
         assert_eq!(strip_reply_fallback("no quote"), "no quote");
     }
 
@@ -436,10 +489,16 @@ mod tests {
     fn redacted_and_undecryptable() {
         let red = json!({"type":"m.room.message","event_id":"$d","sender":"@a:x","origin_server_ts":1,"content":{},
             "unsigned":{"redacted_because":{}}});
-        assert_eq!(parse_event(&red, "@me:x").unwrap().kind, MessageKind::Redacted);
+        assert_eq!(
+            parse_event(&red, "@me:x").unwrap().kind,
+            MessageKind::Redacted
+        );
         let enc = json!({"type":"m.room.encrypted","event_id":"$c","sender":"@a:x","origin_server_ts":1,
             "content":{"algorithm":"m.megolm.v1.aes-sha2"}});
-        assert_eq!(parse_event(&enc, "@me:x").unwrap().kind, MessageKind::Undecryptable);
+        assert_eq!(
+            parse_event(&enc, "@me:x").unwrap().kind,
+            MessageKind::Undecryptable
+        );
     }
 
     #[test]
@@ -448,8 +507,14 @@ mod tests {
         let n = parse_bridge_state(&c).unwrap();
         assert_eq!(n.id, "slack");
         assert_eq!(n.bridge_bot.as_deref(), Some("@slackbot:x"));
-        assert_eq!(threads_supported_from_features(&json!({"thread": 2})), Some(true));
-        assert_eq!(threads_supported_from_features(&json!({"thread": -1})), Some(false));
+        assert_eq!(
+            threads_supported_from_features(&json!({"thread": 2})),
+            Some(true)
+        );
+        assert_eq!(
+            threads_supported_from_features(&json!({"thread": -1})),
+            Some(false)
+        );
         assert_eq!(threads_supported_from_features(&json!({"reply": 2})), None);
         let g = guess_network_from_members(["@me:x", "@groupme_123:x"]).unwrap();
         assert_eq!(g.id, "groupme");

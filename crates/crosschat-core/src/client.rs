@@ -17,7 +17,7 @@ use matrix_sdk::{
     authentication::matrix::MatrixSession,
     config::SyncSettings,
     deserialized_responses::RawAnySyncOrStrippedState,
-    room::{MessagesOptions, RelationsOptions, IncludeRelations},
+    room::{IncludeRelations, MessagesOptions, RelationsOptions},
     ruma::{
         EventId, OwnedEventId, RoomId, UInt, UserId,
         api::{Direction, client::room::create_room},
@@ -124,9 +124,18 @@ impl CrosschatClient {
             .send()
             .await
             .context("login failed")?;
-        let session = client.matrix_auth().session().ok_or_else(|| anyhow!("no session after login"))?;
-        let stored = StoredSession { homeserver: client.homeserver().to_string(), session };
-        write_private(&session_path(&data_dir), &serde_json::to_vec_pretty(&stored)?)?;
+        let session = client
+            .matrix_auth()
+            .session()
+            .ok_or_else(|| anyhow!("no session after login"))?;
+        let stored = StoredSession {
+            homeserver: client.homeserver().to_string(),
+            session,
+        };
+        write_private(
+            &session_path(&data_dir),
+            &serde_json::to_vec_pretty(&stored)?,
+        )?;
         info!(user = ?client.user_id(), "logged in");
         Ok(Self::wrap(client, data_dir))
     }
@@ -140,16 +149,25 @@ impl CrosschatClient {
         }
         let stored: StoredSession = serde_json::from_slice(&std::fs::read(&path)?)?;
         let client = build_client(&stored.homeserver, &data_dir).await?;
-        client.matrix_auth().restore_session(stored.session, RoomLoadSettings::default()).await?;
+        client
+            .matrix_auth()
+            .restore_session(stored.session, RoomLoadSettings::default())
+            .await?;
         Ok(Some(Self::wrap(client, data_dir)))
     }
 
     pub fn user_id(&self) -> String {
-        self.client.user_id().map(|u| u.to_string()).unwrap_or_default()
+        self.client
+            .user_id()
+            .map(|u| u.to_string())
+            .unwrap_or_default()
     }
 
     pub fn device_id(&self) -> String {
-        self.client.device_id().map(|d| d.to_string()).unwrap_or_default()
+        self.client
+            .device_id()
+            .map(|d| d.to_string())
+            .unwrap_or_default()
     }
 
     pub fn homeserver(&self) -> String {
@@ -173,15 +191,23 @@ impl CrosschatClient {
             || !response.rooms.left.is_empty();
         for (room_id, update) in &response.rooms.joined {
             for ev in &update.timeline.events {
-                let Some(json) = raw_json(ev.raw()) else { continue };
+                let Some(json) = raw_json(ev.raw()) else {
+                    continue;
+                };
                 if let Some(msg) = parse_event(&json, &own) {
                     if msg.thread_root.is_none() {
-                        self.last
-                            .lock()
-                            .unwrap()
-                            .insert(room_id.to_string(), LastMessage { ts: msg.ts, body: msg.body.clone() });
+                        self.last.lock().unwrap().insert(
+                            room_id.to_string(),
+                            LastMessage {
+                                ts: msg.ts,
+                                body: msg.body.clone(),
+                            },
+                        );
                     }
-                    let _ = self.events.send(CoreEvent::NewMessage { room_id: room_id.to_string(), message: msg });
+                    let _ = self.events.send(CoreEvent::NewMessage {
+                        room_id: room_id.to_string(),
+                        message: msg,
+                    });
                     changed = true;
                 }
             }
@@ -207,16 +233,22 @@ impl CrosschatClient {
         }
         let this = self.clone();
         *guard = Some(tokio::spawn(async move {
-            let _ = this.events.send(CoreEvent::SyncState { state: "syncing".into() });
+            let _ = this.events.send(CoreEvent::SyncState {
+                state: "syncing".into(),
+            });
             loop {
                 let settings = SyncSettings::default().timeout(Duration::from_secs(30));
                 match this.client.sync_once(settings).await {
                     Ok(response) => this.record_sync(&response),
                     Err(e) => {
                         warn!("sync error: {e}");
-                        let _ = this.events.send(CoreEvent::SyncState { state: format!("error: {e}") });
+                        let _ = this.events.send(CoreEvent::SyncState {
+                            state: format!("error: {e}"),
+                        });
                         tokio::time::sleep(Duration::from_secs(5)).await;
-                        let _ = this.events.send(CoreEvent::SyncState { state: "syncing".into() });
+                        let _ = this.events.send(CoreEvent::SyncState {
+                            state: "syncing".into(),
+                        });
                     }
                 }
             }
@@ -231,20 +263,30 @@ impl CrosschatClient {
 
     fn room(&self, room_id: &str) -> Result<Room> {
         let id = <&RoomId>::try_from(room_id).context("invalid room id")?;
-        self.client.get_room(id).ok_or_else(|| anyhow!("unknown room {room_id}"))
+        self.client
+            .get_room(id)
+            .ok_or_else(|| anyhow!("unknown room {room_id}"))
     }
 
     async fn state_content(room: &Room, ty: &str) -> Option<Value> {
         let events = room.get_state_events(StateEventType::from(ty)).await.ok()?;
         events.iter().find_map(|e| match e {
-            RawAnySyncOrStrippedState::Sync(raw) => raw_json(raw).and_then(|v| v.get("content").cloned()),
-            RawAnySyncOrStrippedState::Stripped(raw) => raw_json(raw).and_then(|v| v.get("content").cloned()),
+            RawAnySyncOrStrippedState::Sync(raw) => {
+                raw_json(raw).and_then(|v| v.get("content").cloned())
+            }
+            RawAnySyncOrStrippedState::Stripped(raw) => {
+                raw_json(raw).and_then(|v| v.get("content").cloned())
+            }
         })
     }
 
     async fn network_of(room: &Room) -> Option<NetworkInfo> {
         for ty in ["m.bridge", "uk.half-shot.bridge"] {
-            if let Some(n) = Self::state_content(room, ty).await.as_ref().and_then(parse_bridge_state) {
+            if let Some(n) = Self::state_content(room, ty)
+                .await
+                .as_ref()
+                .and_then(parse_bridge_state)
+            {
                 return Some(n);
             }
         }
@@ -307,7 +349,14 @@ impl CrosschatClient {
                     .and_then(|mem| mem.display_name().map(str::to_owned)),
                 Err(_) => None,
             }
-            .unwrap_or_else(|| m.sender.trim_start_matches('@').split(':').next().unwrap_or("").to_owned());
+            .unwrap_or_else(|| {
+                m.sender
+                    .trim_start_matches('@')
+                    .split(':')
+                    .next()
+                    .unwrap_or("")
+                    .to_owned()
+            });
             cache.insert(m.sender.clone(), name.clone());
             m.sender_name = name;
         }
@@ -320,7 +369,11 @@ impl CrosschatClient {
         let mut opts = MessagesOptions::backward();
         opts.limit = UInt::from(limit);
         let resp = room.messages(opts).await?;
-        let mut raw: Vec<Value> = resp.chunk.iter().filter_map(|e| raw_json(e.raw())).collect();
+        let mut raw: Vec<Value> = resp
+            .chunk
+            .iter()
+            .filter_map(|e| raw_json(e.raw()))
+            .collect();
         raw.reverse(); // backward pagination returns newest first
         let mut msgs = build_main_timeline(&raw, &self.user_id());
         Self::fill_sender_names(&room, &mut msgs).await;
@@ -333,7 +386,10 @@ impl CrosschatClient {
         let root_eid: OwnedEventId = <&EventId>::try_from(root_id)?.to_owned();
         let own = self.user_id();
         let root_ev = room.event(&root_eid, None).await?;
-        let mut msgs: Vec<Message> = raw_json(root_ev.raw()).and_then(|v| parse_event(&v, &own)).into_iter().collect();
+        let mut msgs: Vec<Message> = raw_json(root_ev.raw())
+            .and_then(|v| parse_event(&v, &own))
+            .into_iter()
+            .collect();
         let opts = RelationsOptions {
             dir: Direction::Forward,
             limit: Some(UInt::from(limit)),
@@ -356,7 +412,12 @@ impl CrosschatClient {
 
     /// Send a text message (markdown allowed). With `thread_root`, the
     /// message is sent as an `m.thread` reply (Slack-style thread).
-    pub async fn send_text(&self, room_id: &str, body: &str, thread_root: Option<&str>) -> Result<String> {
+    pub async fn send_text(
+        &self,
+        room_id: &str,
+        body: &str,
+        thread_root: Option<&str>,
+    ) -> Result<String> {
         let room = self.room(room_id)?;
         let mut content = RoomMessageEventContent::text_markdown(body);
         if let Some(root) = thread_root {
@@ -382,7 +443,10 @@ impl CrosschatClient {
         Ok(resp
             .results
             .into_iter()
-            .map(|u| UserResult { user_id: u.user_id.to_string(), display_name: u.display_name })
+            .map(|u| UserResult {
+                user_id: u.user_id.to_string(),
+                display_name: u.display_name,
+            })
             .collect())
     }
 
@@ -410,7 +474,12 @@ impl CrosschatClient {
     pub async fn join(&self, room_id_or_alias: &str) -> Result<String> {
         use matrix_sdk::ruma::OwnedRoomOrAliasId;
         let id = OwnedRoomOrAliasId::try_from(room_id_or_alias)?;
-        Ok(self.client.join_room_by_id_or_alias(&id, &[]).await?.room_id().to_string())
+        Ok(self
+            .client
+            .join_room_by_id_or_alias(&id, &[])
+            .await?
+            .room_id()
+            .to_string())
     }
 
     /// Log out and wipe local state.
@@ -433,7 +502,10 @@ pub async fn probe_homeserver(url: &str) -> Result<Vec<String>> {
         .get("versions")
         .and_then(Value::as_array)
         .ok_or_else(|| anyhow!("not a Matrix homeserver"))?;
-    let out: Vec<String> = versions.iter().filter_map(|v| v.as_str().map(str::to_owned)).collect();
+    let out: Vec<String> = versions
+        .iter()
+        .filter_map(|v| v.as_str().map(str::to_owned))
+        .collect();
     if out.is_empty() {
         bail!("homeserver reports no versions");
     }
@@ -441,6 +513,10 @@ pub async fn probe_homeserver(url: &str) -> Result<Vec<String>> {
 }
 
 async fn reqwest_get_json(url: &str) -> Result<Value> {
-    let bytes = matrix_sdk::reqwest::get(url).await?.error_for_status()?.bytes().await?;
+    let bytes = matrix_sdk::reqwest::get(url)
+        .await?
+        .error_for_status()?
+        .bytes()
+        .await?;
     Ok(serde_json::from_slice(&bytes)?)
 }

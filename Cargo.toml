@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/crosschat-core", "crates/crosschatd"]
+members = ["crates/crosschat-core", "crates/crosschatd", "app/rust"]
 
 [workspace.package]
 version = "0.1.0-alpha.1"

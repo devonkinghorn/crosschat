@@ -34,8 +34,11 @@ impl Daemon {
     /// Prepare every enabled bridge (install, config, registration), start
     /// the bundled homeserver if configured, then start bridges.
     pub async fn setup(cfg: Config) -> Result<Arc<Self>> {
-        std::fs::create_dir_all(&cfg.data_dir).with_context(|| format!("creating {}", cfg.data_dir.display()))?;
-        let http = reqwest::Client::builder().user_agent(concat!("crosschatd/", env!("CARGO_PKG_VERSION"))).build()?;
+        std::fs::create_dir_all(&cfg.data_dir)
+            .with_context(|| format!("creating {}", cfg.data_dir.display()))?;
+        let http = reqwest::Client::builder()
+            .user_agent(concat!("crosschatd/", env!("CARGO_PKG_VERSION")))
+            .build()?;
         let mut vault = Vault::open(cfg.data_dir.join("vault.json"))?;
         let admin_token = vault.admin_token()?;
         write_private(&admin_token_path(&cfg), admin_token.as_bytes())?;
@@ -47,7 +50,9 @@ impl Daemon {
         std::fs::create_dir_all(&reg_dir)?;
         write_private(
             &reg_dir.join("crosschat-doublepuppet.yaml"),
-            registration::double_puppet(&cfg.homeserver.server_name, &dp_token).to_yaml().as_bytes(),
+            registration::double_puppet(&cfg.homeserver.server_name, &dp_token)
+                .to_yaml()
+                .as_bytes(),
         )?;
 
         let mut bridges = BTreeMap::new();
@@ -84,7 +89,10 @@ impl Daemon {
                 }
                 let binary = match &bc.binary {
                     Some(b) => b.clone(),
-                    None => installer::ensure_installed(m, &cfg.data_dir.join("bin"), &platform, &http).await?,
+                    None => {
+                        installer::ensure_installed(m, &cfg.data_dir.join("bin"), &platform, &http)
+                            .await?
+                    }
                 };
                 let inputs = BridgeInputs {
                     manifest: m,
@@ -97,7 +105,9 @@ impl Daemon {
                 let ctx = bridge::template_context(&inputs);
                 let cfg_path = bridge::config_path(&data_dir);
                 let base = if cfg_path.exists() {
-                    Some(serde_yaml_ng::from_str(&std::fs::read_to_string(&cfg_path)?)?)
+                    Some(serde_yaml_ng::from_str(&std::fs::read_to_string(
+                        &cfg_path,
+                    )?)?)
                 } else {
                     bridge::generate_example_config(m, &binary, &ctx, &data_dir).await?
                 };
@@ -133,15 +143,29 @@ impl Daemon {
             let h = spawn_supervised(spec, BackoffPolicy::default(), true);
             *daemon.homeserver.lock().unwrap() = Some(h);
             info!("waiting for bundled homeserver on port {}", b.port);
-            if !homeserver::wait_ready(&daemon.http, &daemon.cfg.homeserver.url, Duration::from_secs(90)).await {
+            if !homeserver::wait_ready(
+                &daemon.http,
+                &daemon.cfg.homeserver.url,
+                Duration::from_secs(90),
+            )
+            .await
+            {
                 warn!("bundled homeserver not ready after 90s; starting bridges anyway");
             }
         } else {
-            let files: Vec<PathBuf> = daemon.bridges.keys().map(|id| reg_dir.join(format!("{id}.yaml"))).collect();
+            let files: Vec<PathBuf> = daemon
+                .bridges
+                .keys()
+                .map(|id| reg_dir.join(format!("{id}.yaml")))
+                .collect();
             let refs: Vec<&std::path::Path> = files.iter().map(|p| p.as_path()).collect();
             match daemon.cfg.homeserver.registration {
-                RegistrationMode::Manual => warn!("{}", homeserver::manual_instructions(&daemon.cfg, &refs)),
-                RegistrationMode::Directory { .. } => info!("{}", homeserver::manual_instructions(&daemon.cfg, &refs)),
+                RegistrationMode::Manual => {
+                    warn!("{}", homeserver::manual_instructions(&daemon.cfg, &refs))
+                }
+                RegistrationMode::Directory { .. } => {
+                    info!("{}", homeserver::manual_instructions(&daemon.cfg, &refs))
+                }
             }
         }
 
@@ -159,16 +183,23 @@ impl Daemon {
 
     /// Stop bridges, then the homeserver.
     pub async fn shutdown(&self) {
-        let handles: Vec<ProcessHandle> = self.bridges.values().filter_map(|b| b.handle()).collect();
+        let handles: Vec<ProcessHandle> =
+            self.bridges.values().filter_map(|b| b.handle()).collect();
         for h in &handles {
             h.stop();
         }
         for h in &handles {
-            h.wait_for(Duration::from_secs(15), |s| *s == crate::supervisor::ProcState::Stopped).await;
+            h.wait_for(Duration::from_secs(15), |s| {
+                *s == crate::supervisor::ProcState::Stopped
+            })
+            .await;
         }
         if let Some(h) = self.hs_handle() {
             h.stop();
-            h.wait_for(Duration::from_secs(15), |s| *s == crate::supervisor::ProcState::Stopped).await;
+            h.wait_for(Duration::from_secs(15), |s| {
+                *s == crate::supervisor::ProcState::Stopped
+            })
+            .await;
         }
     }
 }
