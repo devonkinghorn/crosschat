@@ -61,6 +61,7 @@ flowchart LR
 **Deployment modes**
 - **Existing homeserver.** `crosschatd` manages the bridges only. Registrations are written to `data/registrations/`. For Synapse you add them to `app_service_config_files` and restart. Tuwunel can load them from an `appservice_dir` (`registration = { kind = "directory" }`).
 - **Bundled homeserver.** `crosschatd` writes a Tuwunel config and runs it as a supervised child process, started before the bridges. `federation` has **no default**: the config refuses to load until you choose `true` or `false`. ✅ (Tuwunel). Continuwuity 📋.
+- **Local (this computer only).** ✅ The desktop app's default first-run choice. It starts `crosschatd local`, which runs a bundled Tuwunel with `server_name = "localhost"`, federation off and loopback-only listeners, plus the bridges. See §4.3.
 - **Client only.** The app logs in to any Matrix account without `crosschatd`. Bridge UI and contact search degrade gracefully.
 
 ## 3. Client core (`crosschat-core`)
@@ -97,7 +98,17 @@ Clients authenticate with their **Matrix access token**. `crosschatd` validates 
 
 **New chat.** The app searches through `POST /search`. Picking a result opens its existing DM room or calls `create_dm` through the proxy, then joins the portal. If `crosschatd` is unreachable, the dialog says so and falls back to the Matrix user directory. A hidden room with the bridge bot (`!gm pm +1555...`) is the last-resort fallback for bridges without the provisioning API 📋.
 
-### 4.3 Manifests
+### 4.3 Local mode (`crosschatd local --dir <dir>`)
+What the desktop app runs for **Start a new server on this computer**. Goal: Crosschat usable with no pre-existing homeserver.
+
+- **Layout.** One directory (`~/Library/Application Support/Crosschat/server` on macOS, `$XDG_DATA_HOME/crosschat/server` on Linux): a generated, user-editable `crosschatd.toml` (`server_name = "localhost"`, `[homeserver.bundled] federation = false`, Tuwunel on `127.0.0.1:6167`, crosschatd on `127.0.0.1:29300`, Google Messages and Slack enabled), `local.json` (the owner), `crosschatd.log`, `crosschatd.pid`, and `data/`. Manifests are compiled into the binary and rewritten to `data/manifests` on each start. A config with federation on is refused.
+- **Progress first.** Unlike `run`, the API binds *before* setup, so the app can poll `GET /_crosschat/v1/local/status` (`phase` = `starting`/`ready`/`failed`, a human-readable `detail`, `data_dir`, `owner`, URLs) while Tuwunel is installed and bridges are set up. Other routes answer 503 `CC_STARTING` until the daemon is ready, then everything is routed to the regular API. A second instance fails fast on the port.
+- **Tuwunel binary** (`tuwunel.rs`, pinned v1.9.3): `$TUWUNEL_BIN` → `homeserver.bundled.binary` → `tuwunel` next to crosschatd (packaged app) → `<cache>/tuwunel-v1.9.3/bin/tuwunel`. Otherwise it installs into the cache: on Linux the upstream `.zst` release with a pinned SHA-256 (decompressed in-process with `ruzstd`); on macOS `cargo install --git … --tag v1.9.3 --locked` without the Linux-only `io_uring`/`systemd` features and without jemalloc, with `/usr/bin` first on `PATH` and `CC`/`CXX`/`AR` removed (Nix gcc breaks RocksDB). Upstream publishes no macOS binaries, and nixpkgs marks the darwin build broken. `$PATH` is not searched on purpose: another version could migrate the database.
+- **Owner bootstrap.** `POST /_crosschat/v1/local/owner {username, password}`, authorized with the local admin token from `data/admin.token` (readable only by the user; the app reads it). It works once (409 `CC_OWNER_EXISTS` afterwards). It registers the account on Tuwunel through user-interactive auth with the vault's `m.login.registration_token` (plus `m.login.dummy` if asked), saves `local.json`, and adds the owner to the admins at runtime. Tuwunel makes its first account a server admin. Registration stays token-gated, so nothing else can sign up.
+- **App side** (`app/lib/src/local/`). `ProcessLocalServer` finds crosschatd (`$CROSSCHATD_BIN` → next to the app executable → `target/{release,debug}` of the checkout the app was built from → `$PATH`), starts it **detached** so bridges outlive the window, reuses an already-running one if its `data_dir` matches (and refuses a foreign one), creates the owner and logs in with the Rust core. Later launches start or reuse it before restoring the session. Desktop only; phones see the option disabled with an explanation.
+- **Limits.** `localhost` can't federate and phones can't reach it. `server_name` is immutable, so moving to a real domain is a migration: re-backfill bridged chats from the networks and re-import native rooms through an appservice with timestamp massaging (tracked as an issue).
+
+### 4.4 Manifests
 One YAML file per bridge. The sections are:
 - `source`: `github-release` (artifacts per platform, checksums or pinned sha256) or `go-build` (repo, commit, tags).
 - `process`: args and port.
@@ -126,7 +137,7 @@ All four ran live under `crosschatd` on Linux in the alpha's smoke test, and eac
 
 ## 6. App (Flutter)
 - **Layout** ✅: rail (72 px) | sidebar (260 px) | channel | thread panel (380 px). On narrow screens (phones), the channel and the thread push as full-screen routes.
-- **Screens** ✅: login, room list with network filter and unread badges, timeline (dense, grouped, day dividers, thread summary rows), composer (Enter to send), thread panel and composer, new-chat dialog, settings, generic bridge login dialog.
+- **Screens** ✅: first-run setup (new local server, the default, or an existing server), login, room list with network filter and unread badges, timeline (dense, grouped, day dividers, thread summary rows), composer (Enter to send), thread panel and composer, new-chat dialog, settings, generic bridge login dialog.
 - **Generic bridgev2 login renderer** ✅ covers every bridgev2 bridge with one component:
   - `user_input`: text, phone, password, token, select. `hardware_key` gets an "Extract from this Mac" button on macOS.
   - `display_and_wait`: QR (`qr_flutter`), pairing code, emoji, then a long-poll for the next step.
@@ -156,7 +167,7 @@ All four ran live under `crosschatd` on Linux in the alpha's smoke test, and eac
 - **Bridge-host decryption.** See §8. It's unavoidable with bridges, and must be communicated clearly in onboarding.
 - **Account bans and ToS.** Apple, Google, Slack, and GroupMe can flag or ban unofficial clients. iMessage via corten-matrix and Google Messages via cookies are the most fragile. The app shows maturity badges and preflight warnings.
 - **Maintenance churn.** Upstream bridges, Google's cookie rotation, Apple's protocol changes, matrix-rust-sdk pre-1.0 APIs, and the bridgev2 provisioning API all move. Mitigation: pinned versions, a manifest per bridge, the end-to-end smoke test in CI-like scripts, and our facade crate as the only Rust API Dart sees.
-- **Onboarding.** A homeserver, reverse proxy, server name, federation choice, a Mac for the iMessage key, and cookie copy-paste on Linux. The setup wizard and embedded webview logins are the biggest UX gaps 📋.
+- **Onboarding.** ✅ No homeserver needed to start: the local server on this computer. Still hard for a real server: reverse proxy, server name, federation choice. Plus a Mac for the iMessage key and cookie copy-paste on Linux. A real-server wizard, local-to-real migration and embedded webview logins are the biggest UX gaps 📋.
 - **GroupMe** has no upstream releases and is early. iMessage has no published checksums.
 - **Threads.** There is no standard "also send to channel" yet, and there is no cross-room thread inbox in the alpha.
 
@@ -164,6 +175,6 @@ All four ran live under `crosschatd` on Linux in the alpha's smoke test, and eac
 1. **Alpha (this repo):** core, daemon, 4 manifests, Flutter UI, end-to-end smoke test, CI.
 2. **Daily-drivable:** E2EE verification and recovery, media, reactions, read receipts, sliding sync, keychain storage, room list performance.
 3. **Logins without a terminal:** embedded cookie webview, real-account testing of all four networks, a bridge health screen, logout and relogin.
-4. **Setup wizard:** bundled homeserver flow (federation choice, server_name lock-in warning, owner bootstrap), reverse proxy recipes, Docker image.
+4. **Setup wizard:** ✅ local server on this computer (owner bootstrap, server_name lock-in warning). 📋 Real-server flow (server name, federation choice), migrating a local server to a real domain, reverse proxy recipes, Docker image.
 5. **Mobile:** sync loop in the Android service, iOS build, then the paid push tier and relay.
 6. **More networks:** WhatsApp, Signal, Telegram.

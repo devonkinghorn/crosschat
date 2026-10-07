@@ -20,8 +20,9 @@ Crosschat is a Slack/Discord-style chat app that puts iMessage, RCS/SMS (Google 
 | **Daemon** (`crates/crosschatd`) | Manifest-driven bridge install: GitHub release with SHA-256 verification, or a Go build at a pinned commit. Config generation (bridge `-e` output + template + managed secrets), appservice registrations, token vault, process supervision with backoff and restarts, health polling, bridge status endpoint, **bundled Tuwunel** (federation must be chosen explicitly). |
 | **Provisioning proxy** | `/_crosschat/v1/...`, authenticated with your Matrix token: the bridgev2 provisioning API for in-app logins, plus a **cross-network contact search** fan-out (`search_users` + `resolve_identifier`). |
 | **Bridges** | Manifests for **iMessage** ([corten-matrix](https://github.com/lrhodin/corten-matrix)), **Google Messages** ([mautrix-gmessages](https://github.com/mautrix/gmessages)), **Slack** ([mautrix-slack](https://github.com/mautrix/slack)) and **GroupMe** ([beeper/groupme](https://github.com/beeper/groupme), early). All four ran live under `crosschatd` on Linux and returned their real login flows through the proxy. |
+| **First-run setup** | **No homeserver needed:** the desktop app (macOS, Linux) offers *Start a new server on this computer* (default) or *Use an existing Matrix server*. The first starts `crosschatd local` with a bundled Tuwunel on `localhost`, creates your owner account and signs you in; later launches reuse it. Tuwunel is downloaded (Linux) or built from source once (macOS). |
 | **App** (`app/`) | Network rail, chat sidebar, dense message list, composer, **Slack-style thread side panel** (pushed routes on phones), and a new-chat dialog that searches bridges through crosschatd and falls back to Matrix users. **Generic bridgev2 login renderer**: forms, QR, code, emoji, cookies via paste, complete. Settings with the bridge list and the **Android "keep connection open"** foreground-service toggle. Capability flags such as macOS-only iMessage key extraction. Demo mode. |
-| **Tests** | 47 daemon tests (unit + HTTP proxy against a fake bridge), 9 core unit tests, 10 Flutter widget tests, and an **end-to-end smoke test** against a real local Tuwunel with a real bridge (`scripts/smoke.sh`). |
+| **Tests** | 58 daemon tests (unit, HTTP proxy against a fake bridge, local-mode owner bootstrap against a fake homeserver), 9 core unit tests, 26 Flutter tests, an **end-to-end smoke test** against a real local Tuwunel with a real bridge (`scripts/smoke.sh`), and a **desktop integration test** of the whole new-server flow (`app/integration_test/`). |
 
 ## What doesn't work yet
 
@@ -31,7 +32,8 @@ Crosschat is a Slack/Discord-style chat app that puts iMessage, RCS/SMS (Google 
 - Classic `/sync` only, no sliding sync yet. No encrypted store or keychain: `session.json` is saved with mode 0600.
 - Android persistent sync keeps the process alive, but the sync loop lives in the activity's engine, so swiping the app away stops it.
 - No push notifications. Push is planned for a paid tier.
-- No setup wizard, Docker image or reverse-proxy recipes yet. **macOS, iOS and Windows builds are untested** (CI has a macOS job, but it isn't active yet; see below).
+- The local server is **for this computer only** (`server_name` is `localhost`, no federation, loopback only): your phone can't reach it, and moving to a real domain later is a migration, not a rename (tracked in an issue). No Docker image, reverse-proxy recipes or federation/server-name wizard for a real server yet.
+- No UI yet to enable more bridges on the local server: edit `crosschatd.toml` in its data directory (below) and restart. **iOS and Windows builds are untested** (CI has a macOS job, but it isn't active yet; see below).
 - WhatsApp, Signal and Telegram are not included yet. They'll be new manifests later. There is no BlueBubbles support.
 
 ## Layout
@@ -46,7 +48,46 @@ scripts/smoke.sh        end-to-end test against a local Tuwunel
 docs/ARCHITECTURE.md    design, decisions, risks
 ```
 
-## Running it
+## Quick start: everything on this computer
+
+You don't need a Matrix homeserver. Build the daemon and run the desktop app:
+
+```bash
+cargo build --release -p crosschatd
+cd app && flutter run -d macos     # or: flutter run -d linux
+```
+
+On first launch pick **Start a new server on this computer**, choose a username and password, and click **Create server**. The app then:
+
+1. starts `crosschatd local --dir <data>/server` **detached**, so bridges keep running after you close the window,
+2. finds or installs Tuwunel (see below) and starts it on `127.0.0.1:6167` with `server_name = "localhost"` and federation off,
+3. installs the enabled bridges (Google Messages and Slack by default),
+4. creates your account (`@you:localhost`, the server's first user and admin) with the server's private registration token,
+5. signs you in. crosschatd is at `http://127.0.0.1:29300`.
+
+Later launches start or reuse the same server and restore your session without asking. **Use an existing Matrix server** is the regular login form.
+
+> `server_name` is permanent in Matrix. The local server is for this computer only: no federation, and phones can't reach it. Moving to a real domain later means re-backfilling bridged chats (see the migration issue).
+
+**Where things live**
+
+| | macOS | Linux |
+|---|---|---|
+| App data (`matrix/` session + store, `server/`) | `~/Library/Application Support/Crosschat` | `$XDG_DATA_HOME/crosschat` (`~/.local/share/crosschat`) |
+| Local server (`crosschatd.toml`, `local.json`, `crosschatd.log`, `data/`) | `…/Crosschat/server` | `…/crosschat/server` |
+| Tuwunel build cache | `~/Library/Caches/Crosschat/tuwunel-v1.9.3/bin/tuwunel` | `~/.cache/crosschat/tuwunel-v1.9.3/bin/tuwunel` |
+
+`crosschatd.toml` in the server directory is generated once and is yours to edit (e.g. `[bridges.imessage] enabled = true`). Then use **Settings → Server on this computer → Restart server**. To stop it entirely: `kill $(cat …/server/crosschatd.pid)` (it stops Tuwunel and the bridges too); the app starts it again on the next launch.
+
+**How the app finds the binaries**
+
+- **crosschatd:** `$CROSSCHATD_BIN`, then next to the app executable (`crosschat.app/Contents/MacOS/crosschatd`, or the Linux bundle directory), then `target/release/crosschatd` / `target/debug/crosschatd` in the source checkout the app was built from, then `$PATH`. `scripts/bundle-local-server.sh [--with-tuwunel]` copies it (and Tuwunel) into a built app for use outside the checkout.
+- **Tuwunel** (resolved by crosschatd; pinned to v1.9.3): `$TUWUNEL_BIN`, then `homeserver.bundled.binary`, then a `tuwunel` next to `crosschatd`, then the cache. If none exist, crosschatd installs it into the cache: on **Linux** it downloads the upstream release and checks its pinned SHA-256; on **macOS**, where upstream ships no binaries and nixpkgs marks darwin broken, it runs `cargo install` at the pinned tag (about 7 min on an M-series Mac, once; needs rustup). The app shows progress. To do it ahead of time: `crosschatd install-tuwunel`.
+- **Overrides:** `CROSSCHAT_HOME` (env, or `--dart-define=CROSSCHAT_HOME=…`) moves all app data, e.g. for a throwaway test profile. `CROSSCHAT_CACHE_DIR` moves the Tuwunel cache.
+
+`crosschatd local` works without the app too: `crosschatd local --dir ~/crosschat-server`, then `GET http://127.0.0.1:29300/_crosschat/v1/local/status` and `POST /_crosschat/v1/local/owner` with the token from `data/admin.token`.
+
+## Running it on a server
 
 Requirements:
 - **Rust** ≥ 1.96 (`rustup`).
@@ -104,7 +145,13 @@ Notes:
 
 ### macOS (step by step)
 
-> ⚠️ Not tested on a Mac yet. These steps match what the CI macOS job runs.
+> Built and run on macOS 15 (Apple silicon) with Homebrew Flutter 3.47 and Xcode 26, including the new-server flow. iOS is untested.
+
+**Build gotchas (read first):**
+- **Put `/usr/bin` first on `PATH`.** A Nix-installed `gcc` (or Homebrew's) can shadow Apple clang as `cc` and break Rust crates with C/C++ code (RocksDB in Tuwunel, cargokit's build of the Rust core). Use `export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:$HOME/.cargo/bin:$PATH"`.
+- **Don't set `CC`, `CXX` or `AR`.** Xcode 26 then fails `flutter build macos` with `clang: error: conflicting deployment targets, both '26.2' and '26.2' are present in environment`. Run `unset CC CXX AR` if your shell sets them.
+- The app needs Dart ≥ 3.13.0 (`pubspec.yaml`); Homebrew's Flutter 3.47.5 ships Dart 3.13.4.
+- crosschatd's macOS Tuwunel build already applies both fixes to its own `cargo install`.
 
 1. **Xcode.** Install it from the App Store, then run:
    ```bash
@@ -132,7 +179,7 @@ Notes:
    cd crosschat
    cargo build && cargo test
    ```
-5. **Run crosschatd** on the Mac. This is optional: the daemon can also run on a Linux server.
+5. **Run crosschatd** on the Mac. Usually you don't need to: the app's **Start a new server on this computer** runs `crosschatd local` for you (see Quick start). For a hand-configured daemon:
    ```bash
    cargo build --release -p crosschatd
    cp deploy/crosschatd.example.toml crosschatd.toml
@@ -140,7 +187,7 @@ Notes:
    ./target/release/crosschatd validate manifests
    ./target/release/crosschatd run -c crosschatd.toml
    ```
-   Tuwunel publishes Linux binaries only, so on a Mac point crosschatd at an existing homeserver (or build Tuwunel from source, untested). The mautrix bridges ship `darwin-arm64` binaries. corten-matrix (iMessage) is used as published upstream.
+   Tuwunel publishes Linux binaries only; on a Mac crosschatd builds the pinned version from source into `~/Library/Caches/Crosschat` the first time (`crosschatd install-tuwunel` does it up front). The mautrix bridges ship `darwin-arm64` binaries. corten-matrix (iMessage) is used as published upstream.
 6. **Run the app:**
    ```bash
    cd app
@@ -148,6 +195,7 @@ Notes:
    flutter run -d macos                                    # real Rust core
    flutter run -d macos --dart-define=CROSSCHAT_DEMO=true  # demo data
    flutter build macos --release
+   ../scripts/bundle-local-server.sh --with-tuwunel        # optional: self-contained .app
    open build/macos/Build/Products/Release/crosschat.app
    ```
    Set the crosschatd URL under Settings → Networks if it isn't served at your homeserver's `/_crosschat/` (e.g. `http://127.0.0.1:29300`).
@@ -162,6 +210,12 @@ The alpha macOS app is **unsandboxed** so it can run the extractor. It has the `
 cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings
 cargo build && cargo test                       # unit + proxy tests (core smoke test skips without a server)
 (cd app && flutter analyze && flutter test)
+
+# Desktop end-to-end of the first-run flow with a throwaway profile:
+# setup screen -> new local server (real crosschatd + Tuwunel) -> logged in
+# -> relaunch reuses the server. Screenshots go to $CROSSCHAT_HOME/screenshots.
+cargo build --release -p crosschatd
+(cd app && flutter test integration_test/local_server_test.dart -d linux --dart-define=CROSSCHAT_HOME=/tmp/cc-e2e)   # or -d macos
 
 # End-to-end. Starts a bundled Tuwunel via crosschatd, installs mautrix-gmessages,
 # registers a user, runs the Rust core smoke test (login/send/threads/sync/restore),
@@ -183,7 +237,7 @@ CI covers Rust fmt/clippy/test, the end-to-end smoke test, Flutter analyze/test,
 
 1. **Daily-drivable:** E2EE verification and recovery, media, reactions, receipts, rich text, sliding sync, keychain storage.
 2. **Logins without a terminal:** an embedded cookie webview, real-account testing of all four networks, a health screen.
-3. **Setup wizard:** bundled homeserver, server-name and federation choice, owner bootstrap, a Docker image, reverse-proxy recipes.
+3. **Real-server setup:** ✅ local server on this computer. Next: a wizard for a real server (server name, federation choice), migrating a local server to a real domain, a Docker image, reverse-proxy recipes.
 4. **Mobile:** sync loop inside the Android service, iOS, then an optional paid push tier and a ~$1/mo TLS-passthrough relay. The relay is documented only.
 5. **More networks:** WhatsApp, Signal, Telegram.
 
