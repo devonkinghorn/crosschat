@@ -9,10 +9,11 @@ use crate::manifest::{self, Manifest};
 use crate::registration;
 use crate::secrets::{Vault, write_private};
 use crate::supervisor::{BackoffPolicy, ProcessHandle, spawn_supervised};
+use crate::tuwunel::{self, Progress};
 use anyhow::{Context, Result};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 use tracing::{error, info, warn};
 
@@ -24,6 +25,8 @@ pub struct Daemon {
     pub validator: Arc<dyn TokenValidator>,
     pub http: reqwest::Client,
     pub homeserver: Mutex<Option<ProcessHandle>>,
+    /// `auth.admins`, plus owners added at runtime (local-mode bootstrap).
+    pub admins: RwLock<Vec<String>>,
 }
 
 pub fn admin_token_path(cfg: &Config) -> PathBuf {
@@ -34,6 +37,12 @@ impl Daemon {
     /// Prepare every enabled bridge (install, config, registration), start
     /// the bundled homeserver if configured, then start bridges.
     pub async fn setup(cfg: Config) -> Result<Arc<Self>> {
+        Self::setup_with_progress(cfg, Arc::new(|_| {})).await
+    }
+
+    /// [`Daemon::setup`], reporting human-readable progress (local mode
+    /// shows it in the app's setup screen).
+    pub async fn setup_with_progress(cfg: Config, progress: Progress) -> Result<Arc<Self>> {
         std::fs::create_dir_all(&cfg.data_dir)
             .with_context(|| format!("creating {}", cfg.data_dir.display()))?;
         let http = reqwest::Client::builder()
@@ -54,6 +63,17 @@ impl Daemon {
                 .to_yaml()
                 .as_bytes(),
         )?;
+
+        // Resolve the homeserver binary first: on a fresh macOS install this
+        // builds Tuwunel from source, and a failure should surface early.
+        let hs_binary = match &cfg.homeserver.bundled {
+            Some(b) => Some(
+                tuwunel::resolve(b.binary.as_deref(), &http, progress.clone())
+                    .await
+                    .context("finding the Tuwunel homeserver binary")?,
+            ),
+            None => None,
+        };
 
         let mut bridges = BTreeMap::new();
         let mut taken_ports = vec![cfg.listen.port()];
@@ -83,6 +103,7 @@ impl Daemon {
             });
             bridges.insert(id.clone(), rt.clone());
 
+            progress(format!("Setting up {}", m.display_name));
             let prepared: Result<_> = async {
                 if !m.supports_host(host_os) {
                     anyhow::bail!("{} does not run on {host_os} hosts", m.display_name);
@@ -128,6 +149,7 @@ impl Daemon {
 
         let daemon = Arc::new(Daemon {
             validator: Arc::new(HomeserverValidator::new(http.clone(), &cfg.homeserver.url)),
+            admins: RwLock::new(cfg.auth.admins.clone()),
             cfg,
             manifests,
             bridges,
@@ -137,9 +159,10 @@ impl Daemon {
         });
 
         // Homeserver first: it must load the registrations before bridges start.
-        if let Some(b) = daemon.cfg.homeserver.bundled.clone() {
+        if let (Some(b), Some(bin)) = (daemon.cfg.homeserver.bundled.clone(), &hs_binary) {
+            progress("Starting the Matrix server".into());
             let token = vault.hs_registration_token()?;
-            let spec = homeserver::prepare_bundled(&daemon.cfg, &b, &token)?;
+            let spec = homeserver::prepare_bundled(&daemon.cfg, &b, bin, &token)?;
             let h = spawn_supervised(spec, BackoffPolicy::default(), true);
             *daemon.homeserver.lock().unwrap() = Some(h);
             info!("waiting for bundled homeserver on port {}", b.port);
@@ -169,12 +192,50 @@ impl Daemon {
             }
         }
 
+        if !specs.is_empty() {
+            progress("Starting bridges".into());
+        }
         for (rt, spec) in specs {
             let h = spawn_supervised(spec, BackoffPolicy::default(), true);
             *rt.handle.lock().unwrap() = Some(h);
             tokio::spawn(bridge::health_loop(rt.clone(), daemon.http.clone()));
         }
         Ok(daemon)
+    }
+
+    /// Assemble a daemon from already-prepared parts (no processes are
+    /// started). Used by tests and embedders.
+    pub fn from_parts(
+        cfg: Config,
+        manifests: Vec<Manifest>,
+        bridges: BTreeMap<String, Arc<BridgeRuntime>>,
+        admin_token: String,
+        validator: Arc<dyn TokenValidator>,
+        http: reqwest::Client,
+    ) -> Self {
+        Daemon {
+            admins: RwLock::new(cfg.auth.admins.clone()),
+            cfg,
+            manifests,
+            bridges,
+            admin_token,
+            validator,
+            http,
+            homeserver: Mutex::new(None),
+        }
+    }
+
+    /// Current admin list (config admins plus runtime additions).
+    pub fn admin_list(&self) -> Vec<String> {
+        self.admins.read().unwrap().clone()
+    }
+
+    /// Grant admin rights at runtime (local-mode owner bootstrap).
+    pub fn add_admin(&self, user_id: &str) {
+        let mut a = self.admins.write().unwrap();
+        if !a.iter().any(|x| x == user_id) {
+            a.push(user_id.to_string());
+        }
     }
 
     pub fn hs_handle(&self) -> Option<ProcessHandle> {

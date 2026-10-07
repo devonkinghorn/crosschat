@@ -22,7 +22,8 @@ registration = { kind = "manual" }
 # server_name cannot be changed later without wiping the database.
 # [homeserver.bundled]
 # implementation = "tuwunel"
-# binary = "/usr/local/bin/tuwunel"
+# binary = "/usr/local/bin/tuwunel"   # optional: default is $TUWUNEL_BIN, a tuwunel next to crosschatd,
+#                                     # or the pinned v1.9.3 installed into ~/.cache/crosschat (Linux download, macOS source build)
 # port = 6167
 # federation = false
 # allow_registration = true   # owner bootstrap with the vault registration token; turn off afterwards

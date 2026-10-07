@@ -102,15 +102,14 @@ fn daemon(port: u16) -> Arc<Daemon> {
     });
     let mut bridges = BTreeMap::new();
     bridges.insert("slack".to_string(), rt);
-    Arc::new(Daemon {
+    Arc::new(Daemon::from_parts(
         cfg,
         manifests,
         bridges,
-        admin_token: "admin-secret".into(),
-        validator: Arc::new(FakeValidator),
-        http: reqwest::Client::new(),
-        homeserver: Mutex::new(None),
-    })
+        "admin-secret".into(),
+        Arc::new(FakeValidator),
+        reqwest::Client::new(),
+    ))
 }
 
 async fn call(
@@ -291,15 +290,14 @@ async fn admin_actions_need_admin() {
     let mut cfg_d = d.cfg.clone();
     cfg_d.auth.allow_server_users = true;
     cfg_d.auth.admins.clear();
-    let d2 = Arc::new(Daemon {
-        cfg: cfg_d,
-        manifests: d.manifests.clone(),
-        bridges: d.bridges.clone(),
-        admin_token: "admin-secret".into(),
-        validator: Arc::new(FakeValidator),
-        http: reqwest::Client::new(),
-        homeserver: Mutex::new(None),
-    });
+    let d2 = Arc::new(Daemon::from_parts(
+        cfg_d,
+        d.manifests.clone(),
+        d.bridges.clone(),
+        "admin-secret".into(),
+        Arc::new(FakeValidator),
+        reqwest::Client::new(),
+    ));
     let (s, _) = call(
         &d2,
         "POST",

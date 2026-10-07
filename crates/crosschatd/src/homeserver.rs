@@ -50,11 +50,11 @@ pub fn tuwunel_config(cfg: &Config, b: &BundledConfig, registration_token: &str)
     out
 }
 
-pub fn tuwunel_spec(cfg: &Config, b: &BundledConfig) -> ProcessSpec {
+pub fn tuwunel_spec(cfg: &Config, binary: &Path) -> ProcessSpec {
     let dir = cfg.data_dir.join("homeserver");
     ProcessSpec {
         name: "homeserver".into(),
-        program: b.binary.clone(),
+        program: binary.to_path_buf(),
         args: vec!["-c".into(), dir.join("tuwunel.toml").display().to_string()],
         env: vec![],
         cwd: Some(dir.clone()),
@@ -65,6 +65,7 @@ pub fn tuwunel_spec(cfg: &Config, b: &BundledConfig) -> ProcessSpec {
 pub fn prepare_bundled(
     cfg: &Config,
     b: &BundledConfig,
+    binary: &Path,
     registration_token: &str,
 ) -> Result<ProcessSpec> {
     let dir = cfg.data_dir.join("homeserver");
@@ -73,7 +74,7 @@ pub fn prepare_bundled(
         &dir.join("tuwunel.toml"),
         tuwunel_config(cfg, b, registration_token).as_bytes(),
     )?;
-    Ok(tuwunel_spec(cfg, b))
+    Ok(tuwunel_spec(cfg, binary))
 }
 
 /// Poll `/_matrix/client/versions` until the homeserver answers.
@@ -128,7 +129,7 @@ mod tests {
         let mut cfg = Config::from_toml(Config::example()).unwrap();
         let b = BundledConfig {
             implementation: "tuwunel".into(),
-            binary: "/usr/bin/tuwunel".into(),
+            binary: Some("/usr/bin/tuwunel".into()),
             port: 6167,
             federation: Some(false),
             allow_registration: true,

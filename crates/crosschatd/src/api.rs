@@ -22,7 +22,8 @@ use std::time::Duration;
 
 type AppState = Arc<Daemon>;
 
-pub struct ApiError(StatusCode, &'static str, String);
+#[derive(Debug)]
+pub struct ApiError(pub StatusCode, pub &'static str, pub String);
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
@@ -75,9 +76,7 @@ async fn principal(d: &Daemon, headers: &HeaderMap) -> Result<Principal, ApiErro
     let token = bearer(headers).ok_or(AuthError::Missing)?;
     if secret_eq(token, &d.admin_token) {
         let user_id = d
-            .cfg
-            .auth
-            .admins
+            .admin_list()
             .first()
             .cloned()
             .unwrap_or_else(|| format!("@crosschatd:{}", d.cfg.homeserver.server_name));
@@ -87,7 +86,11 @@ async fn principal(d: &Daemon, headers: &HeaderMap) -> Result<Principal, ApiErro
         });
     }
     let uid = d.validator.whoami(token).await?;
-    Ok(authorize(&uid, &d.cfg.auth, &d.cfg.homeserver.server_name)?)
+    let auth = crate::config::AuthConfig {
+        admins: d.admin_list(),
+        allow_server_users: d.cfg.auth.allow_server_users,
+    };
+    Ok(authorize(&uid, &auth, &d.cfg.homeserver.server_name)?)
 }
 
 fn require_admin(p: &Principal) -> Result<(), ApiError> {

@@ -68,8 +68,10 @@ pub struct BundledConfig {
     /// Only `tuwunel` is implemented in the alpha.
     #[serde(default = "default_impl")]
     pub implementation: String,
-    /// Path to the homeserver binary.
-    pub binary: PathBuf,
+    /// Path to the homeserver binary. Omit it to let crosschatd find or
+    /// install the pinned Tuwunel (see `tuwunel.rs`; `TUWUNEL_BIN` overrides).
+    #[serde(default)]
+    pub binary: Option<PathBuf>,
     #[serde(default = "default_hs_port")]
     pub port: u16,
     /// Federation must be chosen explicitly at setup: `false` = private

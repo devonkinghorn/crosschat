@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use crosschatd::{api, config::Config, daemon, manifest::Manifest, registration};
+use crosschatd::{api, config::Config, daemon, local, manifest::Manifest, registration, tuwunel};
 use std::path::PathBuf;
 use tracing::info;
 
@@ -35,6 +35,25 @@ enum Cmd {
         #[arg(long, default_value = "http://127.0.0.1:29336")]
         url: String,
     },
+    /// Run a private homeserver + bridges for this computer only (what the
+    /// desktop app starts): server_name `localhost`, bundled Tuwunel on
+    /// 127.0.0.1, no federation. Everything lives in `--dir`.
+    Local {
+        #[arg(long)]
+        dir: PathBuf,
+        /// crosschatd API address (only used when generating crosschatd.toml).
+        #[arg(long, default_value = local::DEFAULT_LISTEN)]
+        listen: std::net::SocketAddr,
+        /// Tuwunel port (only used when generating crosschatd.toml).
+        #[arg(long, default_value_t = local::DEFAULT_HS_PORT)]
+        hs_port: u16,
+        /// Bridges to enable (only used when generating crosschatd.toml).
+        #[arg(long, value_delimiter = ',', default_value = "gmessages,slack")]
+        bridges: Vec<String>,
+    },
+    /// Download (Linux) or build (macOS) the pinned Tuwunel into the cache
+    /// and print its path. Honors TUWUNEL_BIN and CROSSCHAT_CACHE_DIR.
+    InstallTuwunel,
     /// Print an example config file.
     ExampleConfig,
     /// Show daemon status (uses the local admin token).
@@ -46,12 +65,51 @@ enum Cmd {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
-        )
-        .init();
-    match Cli::parse().cmd {
+    let cli = Cli::parse();
+    let filter =
+        || tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into());
+    if let Cmd::Local { dir, .. } = &cli.cmd {
+        // The app starts us detached (no stdio): log to <dir>/crosschatd.log.
+        use tracing_subscriber::fmt::writer::MakeWriterExt;
+        std::fs::create_dir_all(dir)?;
+        let log_path = local::LocalPaths::new(dir).log();
+        if std::fs::metadata(&log_path).is_ok_and(|m| m.len() > 10 << 20) {
+            let _ = std::fs::rename(&log_path, log_path.with_extension("log.1"));
+        }
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_path)?;
+        tracing_subscriber::fmt()
+            .with_env_filter(filter())
+            .with_ansi(false)
+            .with_writer(std::io::stderr.and(std::sync::Mutex::new(file)))
+            .init();
+    } else {
+        tracing_subscriber::fmt().with_env_filter(filter()).init();
+    }
+    match cli.cmd {
+        Cmd::Local {
+            dir,
+            listen,
+            hs_port,
+            bridges,
+        } => {
+            let opts = local::LocalOptions {
+                listen,
+                hs_port,
+                bridges,
+            };
+            if let Err(e) = local::run(local::LocalPaths::new(&dir), opts).await {
+                tracing::error!("{e:#}");
+                return Err(e);
+            }
+        }
+        Cmd::InstallTuwunel => {
+            let progress: tuwunel::Progress = std::sync::Arc::new(|s| eprintln!("{s}"));
+            let p = tuwunel::resolve(None, &reqwest::Client::new(), progress).await?;
+            println!("{}", p.display());
+        }
         Cmd::Run { config } => {
             let cfg = Config::load(&config)?;
             let listen = cfg.listen;
@@ -62,9 +120,7 @@ async fn main() -> Result<()> {
             info!("crosschatd API listening on http://{listen}/_crosschat/v1/health");
             let app = api::router(d.clone());
             axum::serve(listener, app)
-                .with_graceful_shutdown(async {
-                    let _ = tokio::signal::ctrl_c().await;
-                })
+                .with_graceful_shutdown(local::shutdown_signal())
                 .await?;
             info!("shutting down");
             d.shutdown().await;
