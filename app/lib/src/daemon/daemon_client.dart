@@ -44,9 +44,41 @@ class DaemonClient {
     }
   }
 
-  Future<List<BridgeInfo>> networks() async {
+  Future<List<BridgeInfo>> networks() async => (await networksInfo()).bridges;
+
+  /// Every bridge crosschatd knows (enabled or not) plus what this user may do.
+  Future<NetworksInfo> networksInfo() async {
     final v = await _send('GET', '/_crosschat/v1/networks') as Map<String, dynamic>;
-    return (v['bridges'] as List).map((b) => BridgeInfo.fromJson(b as Map<String, dynamic>)).toList();
+    return NetworksInfo.fromJson(v);
+  }
+
+  /// Turn a network on (`enable`: install, configure, register with the
+  /// homeserver, start; runs in the background, watch [networksInfo]), off
+  /// (`disable`: keeps its data and logins) or `remove` it (signs out and
+  /// deletes its data). Server admins only.
+  Future<void> bridgeAction(String bridge, String action) async {
+    await _send('POST', '/_crosschat/v1/bridges/$bridge/$action', body: <String, dynamic>{}, timeout: const Duration(seconds: 60));
+  }
+
+  /// bridgev2 `resolve_identifier`: is this phone number / email / username
+  /// reachable on the network? Returns null when it isn't.
+  Future<Contact?> resolveIdentifier(String bridge, String identifier) async {
+    try {
+      final v = await provision(bridge, 'GET', 'v3/resolve_identifier/${Uri.encodeComponent(identifier)}', timeout: const Duration(seconds: 20))
+          as Map<String, dynamic>;
+      return Contact.fromJson({
+        ...v,
+        'bridge': bridge,
+        'network': v['network'] ?? bridge,
+        'id': v['id'] ?? identifier,
+        'mxid': v['mxid'],
+        'dm_room_mxid': v['dm_room_mxid'],
+        'identifiers': v['identifiers'] ?? [identifier],
+      });
+    } on DaemonException catch (e) {
+      if (e.status == 404 || e.status == 400 || e.errcode == 'M_NOT_FOUND') return null;
+      rethrow;
+    }
   }
 
   /// Contact search across every bridge (bridgev2 `search_users` +
@@ -96,7 +128,9 @@ class DaemonClient {
       'POST',
       'v3/login/step/${step['login_id']}/${step['step_id']}/$type',
       body: type == 'display_and_wait' ? <String, dynamic>{} : data,
-      timeout: type == 'display_and_wait' ? const Duration(minutes: 10) : null,
+      // Waiting on the phone can take minutes; so can a step's work (e.g.
+      // iMessage registering with Apple and joining the iCloud Keychain).
+      timeout: type == 'display_and_wait' ? const Duration(minutes: 10) : const Duration(minutes: 3),
     ) as Map<String, dynamic>;
   }
 
@@ -114,6 +148,30 @@ class DaemonException implements Exception {
   String toString() => 'crosschatd: $message ($status)';
 }
 
+class NetworksInfo {
+  NetworksInfo({required this.bridges, this.admin = false, this.canManage = false, this.keepingAwake = false, this.hostOs});
+
+  factory NetworksInfo.fromJson(Map<String, dynamic> v) => NetworksInfo(
+    bridges: (v['bridges'] as List).map((b) => BridgeInfo.fromJson(b as Map<String, dynamic>)).toList(),
+    admin: v['admin'] as bool? ?? false,
+    canManage: v['can_manage'] as bool? ?? false,
+    keepingAwake: v['keeping_awake'] as bool? ?? false,
+    hostOs: v['host_os'] as String?,
+  );
+
+  final List<BridgeInfo> bridges;
+
+  /// This user administers the server (may add and remove networks).
+  final bool admin;
+
+  /// The server supports adding/removing networks at runtime.
+  final bool canManage;
+
+  /// The server is keeping its computer awake (e.g. for iMessage).
+  final bool keepingAwake;
+  final String? hostOs;
+}
+
 class BridgeInfo {
   BridgeInfo({
     required this.id,
@@ -126,6 +184,11 @@ class BridgeInfo {
     required this.preflight,
     required this.requirements,
     required this.capabilities,
+    this.description,
+    this.hostSupported = true,
+    this.progress,
+    this.setupError,
+    this.keepAwake = false,
   });
 
   factory BridgeInfo.fromJson(Map<String, dynamic> j) => BridgeInfo(
@@ -139,6 +202,11 @@ class BridgeInfo {
     preflight: ((j['preflight'] as List?) ?? []).cast<Map<String, dynamic>>(),
     requirements: ((j['requirements'] as List?) ?? []).cast<Map<String, dynamic>>(),
     capabilities: (j['capabilities'] as Map?)?.cast<String, dynamic>() ?? {},
+    description: j['description'] as String?,
+    hostSupported: j['host_supported'] as bool? ?? true,
+    progress: j['progress'] as String?,
+    setupError: j['setup_error'] as String?,
+    keepAwake: j['keep_awake'] as bool? ?? false,
   );
 
   final String id;
@@ -151,8 +219,28 @@ class BridgeInfo {
   final List<Map<String, dynamic>> preflight;
   final List<Map<String, dynamic>> requirements;
   final Map<String, dynamic> capabilities;
+  final String? description;
+
+  /// The server's OS can run it (e.g. iMessage needs a Mac or a hardware key).
+  final bool hostSupported;
+
+  /// What enabling is doing right now ("Installing iMessage").
+  final String? progress;
+  final String? setupError;
+
+  /// Needs its computer awake (the server keeps it from sleeping).
+  final bool keepAwake;
 
   bool get running => processState == 'running';
+
+  /// Running and answering health checks: ready to sign in.
+  bool get ready => running && live == true;
+
+  /// Preflight items the user must tick off before signing in.
+  List<Map<String, dynamic>> get checklist => [
+    for (final p in preflight)
+      if (p['confirm'] == true) p,
+  ];
 }
 
 class Contact {

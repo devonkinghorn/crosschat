@@ -59,6 +59,8 @@ pub fn router(state: AppState) -> Router {
         .route("/_crosschat/v1/networks", get(networks))
         .route("/_crosschat/v1/search", post(search))
         .route("/_crosschat/v1/contacts", get(contacts))
+        .route("/_crosschat/v1/resolve", post(resolve))
+        .route("/_crosschat/v1/dm", post(start_dm))
         .route("/_crosschat/v1/bridges/{id}/logs", get(logs))
         .route(
             "/_crosschat/v1/bridges/{id}/provision/{*rest}",
@@ -165,6 +167,7 @@ async fn networks(State(d): State<AppState>, headers: HeaderMap) -> Result<Json<
                 // Enabling right now: what it's doing ("Installing iMessage").
                 "progress": progress,
                 "keep_awake": m.keep_awake,
+                "identifier_prefixes": m.identifier_prefixes,
                 "host_platforms": m.host_platforms,
                 "capabilities": m.capabilities,
                 "login_flows": m.login.flows,
@@ -332,6 +335,110 @@ struct SearchBody {
     query: String,
 }
 
+#[derive(Deserialize)]
+struct ResolveBody {
+    /// A phone number or email, in any common format.
+    identifier: String,
+    /// Only ask these bridges (default: every running one).
+    #[serde(default)]
+    bridges: Option<Vec<String>>,
+}
+
+fn encode_path(s: &str) -> String {
+    url::form_urlencoded::byte_serialize(s.as_bytes()).collect()
+}
+
+/// Is this phone number / email reachable on each network? Asks every
+/// running bridge's `resolve_identifier` (in the form that bridge expects,
+/// e.g. `tel:+15551234567` for iMessage). `results[bridge]` is the contact,
+/// or null when the network says it isn't reachable there.
+async fn resolve(
+    State(d): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<ResolveBody>,
+) -> Result<Json<Value>, ApiError> {
+    let p = principal(&d, &headers).await?;
+    let bridges: Vec<_> = d
+        .bridge_list()
+        .into_iter()
+        .filter(|rt| {
+            body.bridges
+                .as_ref()
+                .is_none_or(|only| only.iter().any(|b| b == &rt.manifest.id))
+        })
+        .collect();
+    let futures = bridges.iter().map(|rt| {
+        let (d, p) = (d.clone(), p.clone());
+        let ident = rt.manifest.network_identifier(&body.identifier);
+        async move {
+            let path = format!("v3/resolve_identifier/{}", encode_path(&ident));
+            let r = call_bridge(&d, rt, reqwest::Method::GET, &path, &p.user_id, None).await;
+            (
+                rt.manifest.id.clone(),
+                rt.manifest.network.clone(),
+                ident,
+                r,
+            )
+        }
+    });
+    let mut results = serde_json::Map::new();
+    let mut errors = serde_json::Map::new();
+    for (id, network, ident, r) in futures::future::join_all(futures).await {
+        match r {
+            Ok(v) => {
+                let mut tagged = proxy::tag_results(&id, &network, &[v]);
+                let mut c = serde_json::to_value(tagged.remove(0)).unwrap_or(Value::Null);
+                if c["identifiers"].as_array().is_none_or(|a| a.is_empty()) {
+                    c["identifiers"] = json!([ident]);
+                }
+                results.insert(id, c);
+            }
+            Err(e) => {
+                results.insert(id.clone(), Value::Null);
+                errors.insert(id, json!(e));
+            }
+        }
+    }
+    Ok(Json(json!({"results": results, "errors": errors})))
+}
+
+#[derive(Deserialize)]
+struct DmBody {
+    bridge: String,
+    /// A phone number or email (normalized for the bridge), or the bridge's
+    /// own user id from search results.
+    identifier: String,
+    #[serde(default)]
+    login_id: Option<String>,
+}
+
+/// Create (or reuse) a DM with someone on one network; returns the bridge's
+/// `create_dm` response (`dm_room_mxid`, ...).
+async fn start_dm(
+    State(d): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<DmBody>,
+) -> Result<Json<Value>, ApiError> {
+    let p = principal(&d, &headers).await?;
+    let rt = find_bridge(&d, &body.bridge)?;
+    let ident = rt.manifest.network_identifier(&body.identifier);
+    let mut path = format!("v3/create_dm/{}", encode_path(&ident));
+    if let Some(l) = &body.login_id {
+        path.push_str(&format!("?login_id={}", encode_path(l)));
+    }
+    let v = call_bridge(
+        &d,
+        &rt,
+        reqwest::Method::POST,
+        &path,
+        &p.user_id,
+        Some(json!({})),
+    )
+    .await
+    .map_err(|e| ApiError(StatusCode::BAD_GATEWAY, "CC_BRIDGE_ERROR", e))?;
+    Ok(Json(v))
+}
+
 async fn call_bridge(
     d: &Daemon,
     rt: &BridgeRuntime,
@@ -340,7 +447,11 @@ async fn call_bridge(
     user: &str,
     body: Option<Value>,
 ) -> Result<Value, String> {
-    let url = proxy::upstream_url(rt.port, rest, None, user).map_err(|e| e.to_string())?;
+    let (rest, query) = match rest.split_once('?') {
+        Some((r, q)) => (r, Some(q)),
+        None => (rest, None),
+    };
+    let url = proxy::upstream_url(rt.port, rest, query, user).map_err(|e| e.to_string())?;
     let mut req = d
         .http
         .request(method, url)
@@ -413,9 +524,10 @@ async fn search(
                     Err(e) => err = Some(e),
                 }
                 if proxy::looks_like_identifier(&q) {
+                    let ident = rt.manifest.network_identifier(&q);
                     let path = format!(
                         "v3/resolve_identifier/{}",
-                        url::form_urlencoded::byte_serialize(q.as_bytes()).collect::<String>()
+                        url::form_urlencoded::byte_serialize(ident.as_bytes()).collect::<String>()
                     );
                     if let Ok(v) =
                         call_bridge(&d, rt, reqwest::Method::GET, &path, &p.user_id, None).await

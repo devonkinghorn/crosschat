@@ -44,6 +44,10 @@ process:
 # It holds the Apple push connection on this machine: no messages while the
 # Mac sleeps.
 keep_awake: true
+# resolve_identifier / create_dm take `tel:+15551234567` / `mailto:a@b.c`.
+identifier_prefixes:
+  phone: "tel:"
+  email: "mailto:"
 registration:
   bot_username: imessagebot
   username_template: "imessage_{{.}}"

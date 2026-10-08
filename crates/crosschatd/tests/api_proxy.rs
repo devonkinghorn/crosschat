@@ -45,6 +45,7 @@ async fn fake_bridge(seen: Seen) -> u16 {
     let s1 = seen.clone();
     let s2 = seen.clone();
     let s3 = seen.clone();
+    let s4 = seen.clone();
     let app = Router::new()
         .route(
             "/_matrix/provision/v3/login/flows",
@@ -69,7 +70,23 @@ async fn fake_bridge(seen: Seen) -> u16 {
             "/_matrix/provision/v3/resolve_identifier/{ident}",
             get(move |Path(ident): Path<String>| async move {
                 s3.lock().unwrap().push(("resolve".into(), Some(ident.clone()), None));
-                Json(json!({"id": format!("tel:{ident}"), "name": "Phone contact"}))
+                if ident.contains("0000000") {
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(json!({"errcode": "M_UNKNOWN", "error": "user not found on network"})),
+                    );
+                }
+                (
+                    StatusCode::OK,
+                    Json(json!({"id": format!("tel:{ident}"), "name": "Phone contact"})),
+                )
+            }),
+        )
+        .route(
+            "/_matrix/provision/v3/create_dm/{ident}",
+            post(move |Path(ident): Path<String>, RawQuery(q): RawQuery| async move {
+                s4.lock().unwrap().push((format!("dm:{ident}"), q, None));
+                Json(json!({"id": ident, "dm_room_mxid": "!dm:example.com"}))
             }),
         );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -79,10 +96,15 @@ async fn fake_bridge(seen: Seen) -> u16 {
 }
 
 fn daemon(port: u16) -> Arc<Daemon> {
+    daemon_with(port, |_| {})
+}
+
+fn daemon_with(port: u16, tweak: impl FnOnce(&mut Manifest)) -> Arc<Daemon> {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let cfg = Config::from_toml(Config::example()).unwrap();
     let manifests = Manifest::load_dir(&root.join("manifests")).unwrap();
-    let slack = manifests.iter().find(|m| m.id == "slack").unwrap().clone();
+    let mut slack = manifests.iter().find(|m| m.id == "slack").unwrap().clone();
+    tweak(&mut slack);
     let rt = Arc::new(BridgeRuntime {
         manifest: slack,
         port,
@@ -341,4 +363,90 @@ async fn bridge_status_endpoint_checks_as_token() {
             .as_ref(),
         Some(&body)
     );
+}
+
+#[tokio::test]
+async fn resolve_and_dm_use_the_bridges_identifier_format() {
+    let seen: Seen = Default::default();
+    let port = fake_bridge(seen.clone()).await;
+    let d = daemon_with(port, |m| {
+        m.identifier_prefixes.insert("phone".into(), "tel:".into());
+        m.identifier_prefixes
+            .insert("email".into(), "mailto:".into());
+    });
+    let (s, v) = call(
+        &d,
+        "POST",
+        "/_crosschat/v1/resolve",
+        Some("devon-token"),
+        Some(json!({"identifier": "+1 (801) 555-1234"})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["results"]["slack"]["bridge"], "slack", "{v}");
+    assert!(
+        seen.lock()
+            .unwrap()
+            .iter()
+            .any(|e| e.0 == "resolve" && e.1.as_deref() == Some("tel:+18015551234")),
+        "{:?}",
+        seen.lock().unwrap()
+    );
+
+    // Not reachable: null plus the bridge's reason.
+    let (s, v) = call(
+        &d,
+        "POST",
+        "/_crosschat/v1/resolve",
+        Some("devon-token"),
+        Some(json!({"identifier": "+18010000000", "bridges": ["slack"]})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert!(v["results"]["slack"].is_null(), "{v}");
+    assert!(
+        v["errors"]["slack"].as_str().unwrap().contains("not found"),
+        "{v}"
+    );
+
+    // Only the listed bridges are asked.
+    let (_, v) = call(
+        &d,
+        "POST",
+        "/_crosschat/v1/resolve",
+        Some("devon-token"),
+        Some(json!({"identifier": "+18015551234", "bridges": ["gmessages"]})),
+    )
+    .await;
+    assert_eq!(v["results"], json!({}), "{v}");
+
+    let (s, v) = call(
+        &d,
+        "POST",
+        "/_crosschat/v1/dm",
+        Some("devon-token"),
+        Some(json!({"bridge": "slack", "identifier": "Jess@Example.com", "login_id": "L1"})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["dm_room_mxid"], "!dm:example.com");
+    let dm = seen
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|e| e.0.starts_with("dm:"))
+        .cloned()
+        .unwrap();
+    assert_eq!(dm.0, "dm:mailto:jess@example.com");
+    assert!(dm.1.unwrap().contains("login_id=L1"));
+
+    let (s, _) = call(
+        &d,
+        "POST",
+        "/_crosschat/v1/dm",
+        Some("devon-token"),
+        Some(json!({"bridge": "nope", "identifier": "+18015551234"})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
 }

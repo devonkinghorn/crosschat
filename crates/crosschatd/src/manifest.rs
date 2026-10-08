@@ -75,6 +75,11 @@ pub struct Manifest {
     /// on this machine, like iMessage, miss messages while it sleeps.
     #[serde(default)]
     pub keep_awake: bool,
+    /// How the bridge wants phone numbers / emails in `resolve_identifier`
+    /// and `create_dm`, e.g. iMessage: `{phone: "tel:", email: "mailto:"}`.
+    /// Without an entry the plain `+15551234567` / `a@b.c` is passed.
+    #[serde(default)]
+    pub identifier_prefixes: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -519,6 +524,37 @@ impl Manifest {
         self.host_platforms.iter().any(|h| h == host_os)
     }
 
+    /// A phone number or email as this bridge expects it: formatting
+    /// stripped (`+1 (555) 123-4567` → `+15551234567`), emails lowercased,
+    /// plus the manifest's prefix (`tel:` / `mailto:`). Anything else is
+    /// returned trimmed.
+    pub fn network_identifier(&self, q: &str) -> String {
+        let q = q.trim();
+        let (kind, bare) = if let Some(e) = q.strip_prefix("mailto:") {
+            ("email", e.to_lowercase())
+        } else if let Some(t) = q.strip_prefix("tel:") {
+            ("phone", t.to_string())
+        } else if q.contains('@') && !q.starts_with('@') {
+            ("email", q.to_lowercase())
+        } else if q.starts_with('+')
+            && q.chars()
+                .all(|c| c.is_ascii_digit() || " +-().".contains(c))
+        {
+            (
+                "phone",
+                q.chars()
+                    .filter(|c| c.is_ascii_digit() || *c == '+')
+                    .collect(),
+            )
+        } else {
+            return q.to_string();
+        };
+        match self.identifier_prefixes.get(kind) {
+            Some(prefix) => format!("{prefix}{bare}"),
+            None => bare,
+        }
+    }
+
     /// Pre-login checklist items that apply when the bridge runs on `host_os`.
     pub fn preflight_for_host(&self, host_os: &str) -> Vec<&Preflight> {
         self.preflight
@@ -579,6 +615,51 @@ requirements:
     when_host: [linux]
     provided_by: [macos]
 "#;
+
+    #[test]
+    fn imessage_manifest_checklist_and_identifiers() {
+        let m = Manifest::from_yaml(
+            include_str!("../../../manifests/imessage.yaml"),
+            "imessage.yaml",
+        )
+        .unwrap();
+        assert!(m.keep_awake);
+        let mac: Vec<&str> = m
+            .preflight_for_host("macos")
+            .iter()
+            .map(|p| p.id.as_str())
+            .collect();
+        assert!(mac.contains(&"contact_key_verification"));
+        assert!(mac.contains(&"stay_awake"));
+        let linux: Vec<&str> = m
+            .preflight_for_host("linux")
+            .iter()
+            .map(|p| p.id.as_str())
+            .collect();
+        assert!(!linux.contains(&"stay_awake"));
+        let confirm: Vec<&str> = m
+            .preflight
+            .iter()
+            .filter(|p| p.confirm)
+            .map(|p| p.id.as_str())
+            .collect();
+        assert_eq!(confirm, ["contact_key_verification"]);
+        assert!(m.requirements_for_host("macos").is_empty());
+        assert_eq!(m.requirements_for_host("linux").len(), 1);
+        assert_eq!(
+            m.network_identifier(" +1 (555) 123-4567 "),
+            "tel:+15551234567"
+        );
+        assert_eq!(
+            m.network_identifier("Jess@Example.com"),
+            "mailto:jess@example.com"
+        );
+        assert_eq!(m.network_identifier("tel:+15551234567"), "tel:+15551234567");
+        // Without prefixes (Google Messages): just the cleaned-up number.
+        let g = Manifest::from_yaml(GOOD, "t").unwrap();
+        assert_eq!(g.network_identifier("+1 555-123-4567"), "+15551234567");
+        assert_eq!(g.network_identifier("someone"), "someone");
+    }
 
     #[test]
     fn parses_valid_manifest() {
