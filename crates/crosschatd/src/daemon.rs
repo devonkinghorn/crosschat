@@ -585,6 +585,8 @@ impl Daemon {
             h.wait_for(Duration::from_secs(20), |s| *s == ProcState::Stopped)
                 .await;
         }
+        // Don't report the stopped process as live until the monitor's next tick.
+        *rt.health.lock().unwrap() = Default::default();
         self.update_keep_awake();
         Ok(())
     }
