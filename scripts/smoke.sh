@@ -91,6 +91,9 @@ CROSSCHAT_SMOKE_HS="http://127.0.0.1:$HS_PORT" CROSSCHAT_SMOKE_USER="$USER" CROS
   CROSSCHAT_SMOKE_USER2="$USER2" CROSSCHAT_SMOKE_PASSWORD2="$PASS2" \
   cargo test -q -p crosschat-core --manifest-path "$ROOT/Cargo.toml" --test smoke -- --nocapture
 
+echo "== crosschatd: add/remove a network at runtime"
+TUWUNEL_BIN="$TUWUNEL_BIN" cargo test -q -p crosschatd --manifest-path "$ROOT/Cargo.toml" --test runtime_bridges
+
 echo "== bridges"
 for b in $BRIDGES; do
   for i in $(seq 1 60); do

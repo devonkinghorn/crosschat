@@ -263,6 +263,18 @@ pub struct LocalServer {
     daemon: OnceLock<Arc<Daemon>>,
     api: OnceLock<Router>,
     owner_lock: tokio::sync::Mutex<()>,
+    /// Modification time of our executable when we started: the app compares
+    /// it with the crosschatd it ships and restarts us after an update.
+    exe_mtime_ms: Option<u64>,
+}
+
+/// mtime of the running executable, in ms since the epoch.
+pub fn exe_mtime_ms() -> Option<u64> {
+    let exe = std::env::current_exe().ok()?;
+    let t = std::fs::metadata(exe).ok()?.modified().ok()?;
+    t.duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .map(|d| d.as_millis() as u64)
 }
 
 impl LocalServer {
@@ -290,6 +302,7 @@ impl LocalServer {
             daemon: OnceLock::new(),
             api: OnceLock::new(),
             owner_lock: Default::default(),
+            exe_mtime_ms: exe_mtime_ms(),
         }))
     }
 
@@ -336,7 +349,9 @@ impl LocalServer {
     pub async fn setup(self: &Arc<Self>) {
         let me = self.clone();
         let progress: crate::tuwunel::Progress = Arc::new(move |d| me.set_detail(d));
-        match Daemon::setup_with_progress(self.cfg.clone(), progress).await {
+        match Daemon::setup_with_progress(self.cfg.clone(), progress, Some(self.paths.config()))
+            .await
+        {
             Ok(d) => {
                 if crate::homeserver::wait_ready(
                     &self.http,
@@ -378,6 +393,8 @@ impl LocalServer {
             "daemon_url": format!("http://{}", self.cfg.listen),
             "data_dir": self.paths.root,
             "owner": self.owner(),
+            "exe": std::env::current_exe().ok(),
+            "exe_mtime_ms": self.exe_mtime_ms,
         })
     }
 

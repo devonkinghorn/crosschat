@@ -179,6 +179,39 @@ impl Config {
         }
     }
 
+    /// Turn a bridge on or off in the config file on disk, keeping the rest
+    /// of the file (comments, user edits) as it is.
+    pub fn set_bridge_enabled(path: &Path, id: &str, enabled: bool) -> Result<()> {
+        let text =
+            std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+        let mut doc: toml_edit::DocumentMut = text
+            .parse()
+            .with_context(|| format!("parsing {}", path.display()))?;
+        let bridges = doc
+            .entry("bridges")
+            .or_insert_with(|| {
+                let mut t = toml_edit::Table::new();
+                t.set_implicit(true);
+                toml_edit::Item::Table(t)
+            })
+            .as_table_mut()
+            .with_context(|| format!("[bridges] in {} is not a table", path.display()))?;
+        let entry = bridges
+            .entry(id)
+            .or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()));
+        let table = entry
+            .as_table_like_mut()
+            .with_context(|| format!("[bridges.{id}] in {} is not a table", path.display()))?;
+        table.insert("enabled", toml_edit::value(enabled));
+        let out = doc.to_string();
+        // Refuse to write something we couldn't load back.
+        Self::from_toml(&out)?;
+        let tmp = path.with_extension("toml.tmp");
+        std::fs::write(&tmp, out)?;
+        std::fs::rename(&tmp, path)?;
+        Ok(())
+    }
+
     pub fn example() -> &'static str {
         include_str!("../../../deploy/crosschatd.example.toml")
     }
@@ -187,6 +220,25 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn set_bridge_enabled_keeps_the_rest_of_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("crosschatd.toml");
+        let text = "# my notes\ndata_dir = \"data\"\n[homeserver]\nurl = \"http://127.0.0.1:6167\"\nserver_name = \"localhost\"\n\n[bridges.gmessages]\nenabled = true # keep\nport = 29336\n\n[bridges.imessage]\nenabled = false\n";
+        std::fs::write(&p, text).unwrap();
+        Config::set_bridge_enabled(&p, "imessage", true).unwrap();
+        Config::set_bridge_enabled(&p, "groupme", true).unwrap();
+        let out = std::fs::read_to_string(&p).unwrap();
+        assert!(out.starts_with("# my notes"), "{out}");
+        assert!(out.contains("enabled = true # keep"), "{out}");
+        let c = Config::load(&p).unwrap();
+        assert!(c.bridges["imessage"].enabled);
+        assert!(c.bridges["groupme"].enabled);
+        assert_eq!(c.bridges["gmessages"].port, Some(29336));
+        Config::set_bridge_enabled(&p, "imessage", false).unwrap();
+        assert!(!Config::load(&p).unwrap().bridges["imessage"].enabled);
+    }
 
     #[test]
     fn example_config_parses() {

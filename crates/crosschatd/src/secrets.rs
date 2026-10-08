@@ -82,6 +82,14 @@ impl Vault {
         Ok(s)
     }
 
+    /// Drop a bridge's secrets (it was removed; it gets new ones if re-added).
+    pub fn forget_bridge(&mut self, id: &str) -> Result<()> {
+        if self.data.bridges.remove(id).is_some() {
+            self.save()?;
+        }
+        Ok(())
+    }
+
     fn get_or_create(
         &mut self,
         f: impl Fn(&mut VaultData) -> &mut Option<String>,

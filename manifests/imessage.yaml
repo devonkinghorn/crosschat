@@ -1,11 +1,16 @@
 # iMessage via corten-matrix (bridgev2, MPL-2.0). Prebuilt binaries for
 # macOS (universal) and Linux amd64/arm64 are downloaded at install time and
 # checked against the hashes pinned below.
+#
+# On a Mac the bridge validates its device registration locally through
+# Apple's own AppleAccount framework (AAAbsintheContext), so there is no
+# hardware key to extract: sign in with the Apple ID and you're done. On
+# Linux it needs a hardware key extracted once from any Mac.
 schema: crosschat.bridge/v1
 id: imessage
 display_name: iMessage
 network: imessage
-description: iMessage and SMS-relay through your Apple ID. Runs natively on a Mac, or on Linux with a hardware key extracted once from a Mac.
+description: iMessage (and SMS through your iPhone) with your Apple ID. Runs natively on a Mac, or on Linux with a hardware key extracted once from a Mac.
 framework: bridgev2
 license: MPL-2.0
 homepage: https://github.com/lrhodin/corten-matrix
@@ -20,7 +25,8 @@ source:
     linux-arm64: corten-matrix-linux-arm64
     darwin-universal: corten-matrix-macos
   # Upstream publishes no checksum file; hashes of the 1.3.2 assets as
-  # downloaded 2026-10-07 (the macOS binary links only system libraries).
+  # downloaded 2026-10-07 (the macOS binary links only system frameworks;
+  # re-checked on macOS 15 / arm64 on 2026-10-08).
   sha256:
     linux-amd64: 9139d86b45a25d66c477e757cfaff2e9ae7390a22a9a4215b17cf08785b3ee4a
     linux-arm64: fc5666cf21a15d29a2cbcaf0975f24141d8ca0aa03bf9fc87ddbc058582a8142
@@ -30,20 +36,40 @@ process:
   args: ["-c", "{{config}}", "-r", "{{registration}}", "--no-update"]
   generate_example_config: ["-e", "-c", "{{config}}"]
   default_port: 29332
+  env:
+    # corten-matrix keeps its Apple session (session.json, identity and
+    # keychain trust state) under $XDG_DATA_HOME/corten-matrix; keep it in
+    # the bridge's own data dir instead of ~/.local/share.
+    XDG_DATA_HOME: "{{data_dir}}/state"
+# It holds the Apple push connection on this machine: no messages while the
+# Mac sleeps.
+keep_awake: true
 registration:
   bot_username: imessagebot
   username_template: "imessage_{{.}}"
 config:
+  network:
+    # History from Messages in iCloud. The login then asks for an iPhone/Mac
+    # passcode once, to join the iCloud Keychain (it isn't stored).
+    cloudkit_backfill: true
+    backfill_source: cloudkit
   matrix:
     federate_rooms: false
   encryption:
     allow: true
     default: true
+  backfill:
+    enabled: true
+    # Forward backfill only (Tuwunel has no batch send); a generous cap per chat.
+    max_initial_messages: 1000
+    max_catchup_messages: 5000
+    queue:
+      enabled: false
 login:
   flows:
     - id: apple-id
-      title: Apple ID (on a Mac host)
-      help: Apple ID, password, 2FA code, then choose the phone number or email to send from.
+      title: Apple ID (on this Mac)
+      help: Apple ID and password, the 2FA code if Apple asks, your iPhone or Mac passcode for iCloud history, then the number or email to send from.
     - id: external-key
       title: Apple ID with hardware key (Linux host)
       help: >-
@@ -54,22 +80,53 @@ capabilities:
   replies: yes
   reactions: yes
   edits: yes
-  contacts: yes
-  search_users: unknown
+  contacts: no
+  search_users: no
   create_group: unknown
 preflight:
   - id: contact_key_verification
     severity: blocking
+    confirm: true
     message: >-
-      Contact Key Verification must be turned OFF on your Apple ID
-      (iPhone: Settings → your name → Contact Key Verification), or login fails.
+      Contact Key Verification is OFF for your Apple ID (iPhone: Settings → your
+      name → Contact Key Verification; Mac: System Settings → your name →
+      Contact Key Verification). Sign-in fails while it's on.
     link: https://github.com/lrhodin/corten-matrix#troubleshooting
+  - id: macos_version
+    severity: blocking
+    when_host: [macos]
+    message: This Mac runs macOS 13 Ventura or later (Apple's sign-in framework the bridge uses needs it).
+  - id: icloud_on_this_mac
+    severity: info
+    when_host: [macos]
+    message: >-
+      Recommended: this Mac is signed in to iCloud with the same Apple ID
+      (System Settings → your name). Apple then recognizes the Mac and usually
+      skips the 2FA code. Messages itself doesn't need to be open.
   - id: icloud_history
     severity: info
-    message: History backfill comes from iCloud (CloudKit) and asks for your iPhone passcode to join the iCloud Keychain trust circle.
+    message: >-
+      For your message history, turn on Messages in iCloud (iPhone: Settings →
+      your name → iCloud → Messages). You'll be asked once for your iPhone or
+      Mac passcode to join the iCloud Keychain; it isn't stored.
+  - id: stay_awake
+    severity: warning
+    when_host: [macos]
+    message: >-
+      This Mac has to stay on, awake and online for iMessages to arrive.
+      Crosschat keeps it from going to sleep on its own while iMessage is
+      connected (the screen can still turn off); closing the lid still sleeps it.
+  - id: sms_forwarding
+    severity: info
+    message: >-
+      Green-bubble SMS too: after connecting, on your iPhone open Settings →
+      Messages → Text Message Forwarding and turn on the new entry.
   - id: account_risk
     severity: warning
-    message: Apple may flag the bridge's device registration. Consider the risk to your Apple ID before enabling.
+    message: >-
+      The bridge registers as a new Apple device on your Apple ID. Apple may
+      flag unusual registrations; consider the risk before enabling. If you
+      remove iMessage later, also remove the device at appleid.apple.com → Devices.
 requirements:
   - id: hardware_key
     description: >-

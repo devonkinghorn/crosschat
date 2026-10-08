@@ -70,6 +70,11 @@ pub struct Manifest {
     pub requirements: Vec<Requirement>,
     #[serde(default)]
     pub health: HealthSpec,
+    /// Keep the host from idle-sleeping while the bridge runs (macOS
+    /// `caffeinate -i`): bridges that hold a live connection to the network
+    /// on this machine, like iMessage, miss messages while it sleeps.
+    #[serde(default)]
+    pub keep_awake: bool,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -206,6 +211,12 @@ pub struct Preflight {
     pub message: String,
     #[serde(default)]
     pub link: Option<String>,
+    /// Host OSes this applies to (empty = all).
+    #[serde(default)]
+    pub when_host: Vec<String>,
+    /// The app asks the user to tick it off before signing in.
+    #[serde(default)]
+    pub confirm: bool,
 }
 
 /// Something the user must supply that only certain *client* platforms can
@@ -506,6 +517,14 @@ impl Manifest {
 
     pub fn supports_host(&self, host_os: &str) -> bool {
         self.host_platforms.iter().any(|h| h == host_os)
+    }
+
+    /// Pre-login checklist items that apply when the bridge runs on `host_os`.
+    pub fn preflight_for_host(&self, host_os: &str) -> Vec<&Preflight> {
+        self.preflight
+            .iter()
+            .filter(|p| p.when_host.is_empty() || p.when_host.iter().any(|h| h == host_os))
+            .collect()
     }
 
     /// Requirements that apply when the bridge runs on `host_os`.

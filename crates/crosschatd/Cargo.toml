@@ -25,6 +25,7 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 serde_yaml_ng = "0.10"
 toml = "1"
+toml_edit = "0.25"
 axum = "0.8"
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "json"] }
 clap = { version = "4", features = ["derive"] }

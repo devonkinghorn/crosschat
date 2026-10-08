@@ -99,6 +99,7 @@ fn daemon(port: u16) -> Arc<Daemon> {
         health: Default::default(),
         remote_state: Mutex::new(None),
         setup_error: Mutex::new(None),
+        retired: Default::default(),
     });
     let mut bridges = BTreeMap::new();
     bridges.insert("slack".to_string(), rt);
@@ -293,7 +294,7 @@ async fn admin_actions_need_admin() {
     let d2 = Arc::new(Daemon::from_parts(
         cfg_d,
         d.manifests.clone(),
-        d.bridges.clone(),
+        d.bridges.read().unwrap().clone(),
         "admin-secret".into(),
         Arc::new(FakeValidator),
         reqwest::Client::new(),
@@ -332,7 +333,12 @@ async fn bridge_status_endpoint_checks_as_token() {
     .await;
     assert_eq!(s, StatusCode::OK);
     assert_eq!(
-        d.bridges["slack"].remote_state.lock().unwrap().as_ref(),
+        d.bridge("slack")
+            .unwrap()
+            .remote_state
+            .lock()
+            .unwrap()
+            .as_ref(),
         Some(&body)
     );
 }

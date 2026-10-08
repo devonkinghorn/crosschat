@@ -105,14 +105,22 @@ fn require_admin(p: &Principal) -> Result<(), ApiError> {
     }
 }
 
-fn find_bridge<'a>(d: &'a Daemon, id: &str) -> Result<&'a Arc<BridgeRuntime>, ApiError> {
-    d.bridges.get(id).ok_or_else(|| {
+fn find_bridge(d: &Daemon, id: &str) -> Result<Arc<BridgeRuntime>, ApiError> {
+    d.bridge(id).ok_or_else(|| {
         ApiError(
             StatusCode::NOT_FOUND,
             "M_NOT_FOUND",
             format!("bridge `{id}` is not enabled"),
         )
     })
+}
+
+fn internal(e: anyhow::Error) -> ApiError {
+    ApiError(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "CC_INTERNAL",
+        format!("{e:#}"),
+    )
 }
 
 async fn health() -> Json<Value> {
@@ -133,7 +141,12 @@ async fn networks(State(d): State<AppState>, headers: HeaderMap) -> Result<Json<
         .manifests
         .iter()
         .map(|m| {
-            let rt = d.bridges.get(&m.id);
+            let rt = d.bridge(&m.id);
+            let rt = rt.as_ref();
+            let progress = d.progress_of(&m.id);
+            let setup_error = rt
+                .and_then(|r| r.setup_error.lock().unwrap().clone())
+                .or_else(|| d.enable_errors.lock().unwrap().get(&m.id).cloned());
             json!({
                 "id": m.id,
                 "display_name": m.display_name,
@@ -148,10 +161,14 @@ async fn networks(State(d): State<AppState>, headers: HeaderMap) -> Result<Json<
                 "restarts": rt.and_then(|r| r.handle()).map(|h| h.restarts()),
                 "health": rt.map(|r| serde_json::to_value(&*r.health.lock().unwrap()).unwrap()),
                 "remote_state": rt.and_then(|r| r.remote_state.lock().unwrap().clone()),
-                "setup_error": rt.and_then(|r| r.setup_error.lock().unwrap().clone()),
+                "setup_error": setup_error,
+                // Enabling right now: what it's doing ("Installing iMessage").
+                "progress": progress,
+                "keep_awake": m.keep_awake,
+                "host_platforms": m.host_platforms,
                 "capabilities": m.capabilities,
                 "login_flows": m.login.flows,
-                "preflight": m.preflight,
+                "preflight": m.preflight_for_host(host_os),
                 "requirements": m.requirements_for_host(host_os),
             })
         })
@@ -162,6 +179,9 @@ async fn networks(State(d): State<AppState>, headers: HeaderMap) -> Result<Json<
         "host_os": host_os,
         "host_platform": manifest::current_platform(),
         "homeserver": d.hs_handle().map(|h| serde_json::to_value(h.state()).unwrap()),
+        "keeping_awake": d.keeping_awake(),
+        // Whether this daemon can turn bridges on and off ("Add network").
+        "can_manage": true,
         "bridges": list,
     })))
 }
@@ -172,6 +192,34 @@ async fn bridge_action(
     Path((id, action)): Path<(String, String)>,
 ) -> Result<Json<Value>, ApiError> {
     require_admin(&principal(&d, &headers).await?)?;
+    match action.as_str() {
+        "enable" => {
+            if d.manifest(&id).is_none() {
+                return Err(ApiError(
+                    StatusCode::NOT_FOUND,
+                    "M_NOT_FOUND",
+                    format!("no bridge called `{id}`"),
+                ));
+            }
+            // Downloads and a homeserver restart can take a while: run in the
+            // background; GET /networks shows `progress` and `setup_error`.
+            let d2 = d.clone();
+            let id2 = id.clone();
+            tokio::spawn(async move {
+                let _ = d2.enable(&id2).await;
+            });
+            return Ok(Json(json!({"ok": true, "started": true})));
+        }
+        "disable" => {
+            d.disable(&id).await.map_err(internal)?;
+            return Ok(Json(json!({"ok": true})));
+        }
+        "remove" => {
+            d.remove(&id).await.map_err(internal)?;
+            return Ok(Json(json!({"ok": true})));
+        }
+        _ => {}
+    }
     let rt = find_bridge(&d, &id)?;
     let h = rt.handle().ok_or_else(|| {
         ApiError(
@@ -323,25 +371,33 @@ async fn search(
 ) -> Result<Json<Value>, ApiError> {
     let p = principal(&d, &headers).await?;
     let q = body.query.trim().to_string();
-    let futures = d
-        .bridges
-        .values()
-        .filter(|rt| rt.manifest.capabilities.search_users != Support::No)
+    let bridges = d.bridge_list();
+    // search_users where the bridge has it; resolve_identifier (is this
+    // phone number / email on the network?) everywhere for identifier queries.
+    let futures = bridges
+        .iter()
+        .filter(|rt| {
+            rt.manifest.capabilities.search_users != Support::No || proxy::looks_like_identifier(&q)
+        })
         .map(|rt| {
             let (d, p, q) = (d.clone(), p.clone(), q.clone());
             async move {
                 let mut results: Vec<ContactResult> = Vec::new();
                 let mut err = None;
-                match call_bridge(
-                    &d,
-                    rt,
-                    reqwest::Method::POST,
-                    "v3/search_users",
-                    &p.user_id,
-                    Some(json!({"query": q})),
-                )
-                .await
-                {
+                let searched = if rt.manifest.capabilities.search_users == Support::No {
+                    Ok(json!({"results": []}))
+                } else {
+                    call_bridge(
+                        &d,
+                        rt,
+                        reqwest::Method::POST,
+                        "v3/search_users",
+                        &p.user_id,
+                        Some(json!({"query": q})),
+                    )
+                    .await
+                };
+                match searched {
                     Ok(v) => {
                         let items = v
                             .get("results")
@@ -401,7 +457,7 @@ async fn contacts(
     let rt = find_bridge(&d, &q.bridge)?;
     let v = call_bridge(
         &d,
-        rt,
+        &rt,
         reqwest::Method::GET,
         "v3/contacts",
         &p.user_id,

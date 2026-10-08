@@ -255,9 +255,26 @@ pub struct BridgeRuntime {
     /// Last state pushed by the bridge to the status endpoint.
     pub remote_state: Mutex<Option<serde_json::Value>>,
     pub setup_error: Mutex<Option<String>>,
+    /// Set when the bridge is turned off: its health loop ends.
+    pub retired: std::sync::atomic::AtomicBool,
 }
 
 impl BridgeRuntime {
+    /// A runtime that hasn't been prepared or started yet.
+    pub fn new(manifest: Manifest, port: u16, data_dir: PathBuf, secrets: BridgeSecrets) -> Self {
+        Self {
+            manifest,
+            port,
+            data_dir,
+            secrets,
+            handle: Mutex::new(None),
+            health: Default::default(),
+            remote_state: Mutex::new(None),
+            setup_error: Mutex::new(None),
+            retired: Default::default(),
+        }
+    }
+
     pub fn proc_state(&self) -> ProcState {
         self.handle
             .lock()
@@ -284,6 +301,9 @@ pub async fn health_loop(rt: std::sync::Arc<BridgeRuntime>, http: reqwest::Clien
     let mut interval = tokio::time::interval(Duration::from_secs(spec.interval_secs.max(1)));
     loop {
         interval.tick().await;
+        if rt.retired.load(std::sync::atomic::Ordering::Relaxed) {
+            return;
+        }
         let Some(handle) = rt.handle() else { continue };
         let running_for = match handle.state() {
             ProcState::Running { started_at_ms, .. } => {
@@ -342,6 +362,15 @@ pub async fn health_loop(rt: std::sync::Arc<BridgeRuntime>, http: reqwest::Clien
             handle.restart();
         }
     }
+}
+
+/// The port in a bridge's existing registration (`url: http://127.0.0.1:N`),
+/// so a restart keeps the registration the homeserver already loaded.
+pub fn registration_url_port(reg_dir: &Path, id: &str) -> Option<u16> {
+    let text = std::fs::read_to_string(reg_dir.join(format!("{id}.yaml"))).ok()?;
+    let v: Value = serde_yaml_ng::from_str(&text).ok()?;
+    let url = v.get("url")?.as_str()?;
+    url::Url::parse(url).ok()?.port()
 }
 
 /// Pick the appservice port: configured, else upstream default if free, else
