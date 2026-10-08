@@ -313,6 +313,22 @@ class _BridgeLoginDialogState extends State<BridgeLoginDialog> {
         // window they only appear under "Advanced".
         if (instructions != null && instructions.isNotEmpty && !(step['type'] == 'cookies' && _webAuthOk))
           Padding(padding: const EdgeInsets.only(bottom: 12), child: Text(instructions)),
+        // Crosschat extension (steps crosschatd serves itself): buttons that
+        // open e.g. the right System Settings pane.
+        for (final l in ((step['links'] as List?) ?? const []).whereType<Map>())
+          if (l['url'] is String)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: OutlinedButton.icon(
+                  key: Key('step-link-${l['url']}'),
+                  icon: const Icon(Icons.open_in_new, size: 16),
+                  label: Text(l['title'] as String? ?? 'Open'),
+                  onPressed: () => launchUrl(Uri.parse(l['url'] as String)),
+                ),
+              ),
+            ),
         switch (step['type']) {
           'user_input' => _userInput(step['user_input'] as Map<String, dynamic>),
           'display_and_wait' => _displayAndWait(step['display_and_wait'] as Map<String, dynamic>),

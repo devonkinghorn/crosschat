@@ -13,6 +13,7 @@ pub mod daemon;
 pub mod homeserver;
 pub mod installer;
 pub mod local;
+pub mod local_setup;
 pub mod manifest;
 pub mod proxy;
 pub mod registration;

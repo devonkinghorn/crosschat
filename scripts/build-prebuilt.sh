@@ -32,11 +32,16 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 # --- Pins (keep in sync with manifests/*.yaml and tuwunel.rs; the crosschatd
 # tests check the manifests against prebuilt/SHA256SUMS). ---
+# Go build tags: goolm (pure-Go olm, no libolm) for bridgev2 bridges.
+# mautrix-imessage (legacy, master's last commit, macOS-only `mac`
+# connector) predates goolm, so it's built without Matrix encryption
+# (nocrypto); it only talks to the homeserver on the same Mac.
 BRIDGES=(
-  # id        repo                                     rev                                        package                    targets
-  "gmessages  https://github.com/mautrix/gmessages.git v0.2609.0                                  ./cmd/mautrix-gmessages    darwin-arm64,darwin-amd64"
-  "slack      https://github.com/mautrix/slack.git     v0.2609.1                                  ./cmd/mautrix-slack        darwin-arm64,darwin-amd64"
-  "groupme    https://github.com/beeper/groupme.git    ff4fbcc6211d7e24fb0c240f6dc15e95555962db   ./cmd/mautrix-groupme      darwin-arm64,darwin-amd64,linux-amd64,linux-arm64"
+  # id        repo                                     rev                                        package                    targets                                            tags
+  "gmessages  https://github.com/mautrix/gmessages.git v0.2609.0                                  ./cmd/mautrix-gmessages    darwin-arm64,darwin-amd64                          goolm"
+  "slack      https://github.com/mautrix/slack.git     v0.2609.1                                  ./cmd/mautrix-slack        darwin-arm64,darwin-amd64                          goolm"
+  "groupme    https://github.com/beeper/groupme.git    ff4fbcc6211d7e24fb0c240f6dc15e95555962db   ./cmd/mautrix-groupme      darwin-arm64,darwin-amd64,linux-amd64,linux-arm64  goolm"
+  "imessage   https://github.com/mautrix/imessage.git  300ba6d0e5566d1f841d42ee1555779a9b6fa4be   .                          darwin-arm64,darwin-amd64                          nocrypto"
 )
 TUWUNEL_VERSION=v1.9.3
 TUWUNEL_REPO=https://github.com/matrix-construct/tuwunel
@@ -90,8 +95,8 @@ package() {
 if [[ $ONLY_PACKAGE == 1 ]]; then package; exit 0; fi
 [[ ${#TARGETS[@]} -gt 0 ]] || { echo "no TARGET given (see --help)" >&2; exit 2; }
 
-build_bridge() { # id repo rev package target
-  local id=$1 repo=$2 rev=$3 pkg=$4 target=$5
+build_bridge() { # id repo rev package target tags
+  local id=$1 repo=$2 rev=$3 pkg=$4 target=$5 tags=${6:-goolm}
   local goos=${target%-*} goarch=${target#*-}
   command -v go >/dev/null || { echo "go is required to build bridges" >&2; exit 1; }
   local src="$WORK/src/$id"
@@ -123,7 +128,7 @@ build_bridge() { # id repo rev package target
       ;;
   esac
   echo "== $id $label $target"
-  (cd "$src" && env "${env[@]}" go build -trimpath -buildvcs=false -tags goolm \
+  (cd "$src" && env "${env[@]}" go build -trimpath -buildvcs=false -tags "$tags" \
       -ldflags "$ldflags" -o "$out" "$pkg")
 }
 
@@ -143,8 +148,8 @@ build_tuwunel() { # target
 for t in "${TARGETS[@]}"; do
   if [[ $DO_BRIDGES == 1 ]]; then
     for line in "${BRIDGES[@]}"; do
-      read -r id repo rev pkg targets <<<"$line"
-      if [[ ",$targets," == *",$t,"* ]]; then build_bridge "$id" "$repo" "$rev" "$pkg" "$t"; fi
+      read -r id repo rev pkg targets tags <<<"$line"
+      if [[ ",$targets," == *",$t,"* ]]; then build_bridge "$id" "$repo" "$rev" "$pkg" "$t" "$tags"; fi
     done
   fi
   if [[ $DO_TUWUNEL == 1 ]]; then build_tuwunel "$t"; fi

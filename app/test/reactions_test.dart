@@ -1,4 +1,6 @@
 import 'package:crosschat/src/backend/demo_backend.dart';
+import 'package:crosschat/src/daemon/daemon_client.dart';
+import 'package:crosschat/src/state/app_state.dart';
 import 'package:crosschat/src/models.dart';
 import 'package:crosschat/src/state/saved.dart';
 import 'package:crosschat/src/ui/emoji_picker.dart';
@@ -7,6 +9,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'app_test.dart' show android, login, pumpApp;
+
+import 'package:crosschat/src/ui/message_actions.dart' show MessageActions;
 
 const eng = '!eng:slack';
 const me = DemoBackend.me;
@@ -27,6 +31,42 @@ Future<TestGesture> hover(WidgetTester tester, Finder finder) async {
   await tester.pump();
   await tester.pump();
   return g;
+}
+
+/// "iMessage (this Mac)": its bridge can't send reactions.
+final macMessages = BridgeInfo(
+  id: 'imessage-mac',
+  displayName: 'iMessage (this Mac)',
+  network: 'imessage',
+  enabled: true,
+  maturity: 'beta',
+  processState: 'running',
+  live: true,
+  preflight: const [],
+  requirements: const [],
+  capabilities: const {'reactions': 'no', 'edits': 'no'},
+);
+
+/// Opens Mom's iMessage chat (on [macMessages]) with a ❤️ from her.
+Future<void> openMacChat(WidgetTester tester, AppState state, DemoBackend backend) async {
+  final t = DateTime.now().millisecondsSinceEpoch;
+  backend.replaceEvents('!mom:imessage', [
+    Message(
+      eventId: r'$hi',
+      sender: '@mom:x',
+      senderName: 'Mom',
+      body: 'see you soon',
+      ts: t - 60000,
+      reactions: const [
+        ReactionGroup(key: '❤️', senders: ['@mom:x']),
+      ],
+    ),
+  ]);
+  await login(tester);
+  state.bridges = [macMessages];
+  await state.refreshRooms();
+  await tester.tap(find.byKey(const Key('room-!mom:imessage')));
+  await tester.pumpAndSettle();
 }
 
 void main() {
@@ -321,6 +361,72 @@ void main() {
         ReactionGroup(key: '😂', senders: [me], own: true, ownFromText: true),
       ];
       expect(applyOwnReaction(text, '😂', me, add: false).single.own, isTrue);
+    });
+  });
+
+  group("networks that can't send reactions", () {
+    testWidgets('desktop: chips only show who reacted; the toolbar says why instead of offering reactions', (tester) async {
+      final backend = DemoBackend();
+      final state = await pumpApp(tester, backend: backend);
+      await openMacChat(tester, state, backend);
+      final why = state.reactionsUnavailable('!mom:imessage');
+      expect(why, contains('iMessage (this Mac)'));
+      expect(state.reactionsUnavailable(eng), isNull, reason: 'Slack still reacts');
+
+      // Her ❤️ shows; clicking it does nothing, and there's no add button.
+      expect(find.byKey(const Key(r'reaction-$hi-❤️')), findsOneWidget);
+      await tester.tap(find.byKey(const Key(r'reaction-$hi-❤️')));
+      await tester.pumpAndSettle();
+      expect(backend.reactionCalls, isEmpty);
+      expect(find.byKey(const Key(r'reaction-add-$hi')), findsNothing);
+
+      final g = await hover(tester, find.byKey(const Key(r'message-$hi')));
+      expect(find.byKey(const Key('hover-toolbar')), findsOneWidget);
+      expect(find.byKey(const Key('toolbar-reactions-unavailable')), findsOneWidget);
+      for (final e in quickReactions) {
+        expect(find.byKey(Key('quick-react-$e')), findsNothing, reason: e);
+      }
+      expect(find.byKey(const Key('toolbar-pick-emoji')), findsNothing);
+      expect(find.byKey(const Key('toolbar-save')), findsOneWidget, reason: 'saving still works');
+      await tester.tap(find.byKey(const Key('toolbar-reactions-unavailable')));
+      await tester.pumpAndSettle();
+      expect(backend.reactionCalls, isEmpty);
+      await g.moveTo(Offset.zero);
+      await tester.pumpAndSettle();
+
+      // Even a direct call is refused, without touching the network.
+      final hi = state.messages.firstWhere((m) => m.eventId == r'$hi');
+      expect(await state.toggleReaction(hi, '👍'), why);
+      expect(backend.reactionCalls, isEmpty);
+      expect(MessageActions.of(state).canReact, isFalse);
+    });
+
+    testWidgets('phone: the long-press sheet explains instead of offering reactions', (tester) async {
+      final backend = DemoBackend();
+      final state = await pumpApp(tester, size: const Size(420, 860), caps: android, backend: backend);
+      await openMacChat(tester, state, backend);
+      await tester.longPress(find.byKey(const Key(r'message-$hi')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('message-actions-sheet')), findsOneWidget);
+      expect(find.byKey(const Key('sheet-reactions-unavailable')), findsOneWidget);
+      for (final e in quickReactions) {
+        expect(find.byKey(Key('sheet-react-$e')), findsNothing, reason: e);
+      }
+      expect(find.byKey(const Key('sheet-pick-emoji')), findsNothing);
+      expect(find.byKey(const Key('sheet-save')), findsOneWidget);
+    });
+
+    test('a network waiting for its own sign-in counts as ready', () {
+      final b = BridgeInfo.fromJson({
+        'id': 'imessage-mac',
+        'display_name': 'iMessage (this Mac)',
+        'network': 'imessage',
+        'enabled': true,
+        'awaiting_setup': true,
+      });
+      expect(b.running, isFalse);
+      expect(b.ready, isTrue);
+      expect(BridgeInfo.fromJson({'id': 'x', 'display_name': 'X', 'network': 'x', 'enabled': true}).ready, isFalse);
     });
   });
 }

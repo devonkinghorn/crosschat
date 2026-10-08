@@ -6,6 +6,7 @@ use crate::bridge::{self, BridgeInputs, BridgeRuntime};
 use crate::config::{BridgeConfig, Config, RegistrationMode};
 use crate::homeserver;
 use crate::installer;
+use crate::local_setup;
 use crate::manifest::{self, Manifest};
 use crate::registration;
 use crate::secrets::{Vault, write_private};
@@ -201,7 +202,7 @@ impl Daemon {
             progress("Starting bridges".into());
         }
         for (rt, spec) in specs {
-            daemon.start_bridge(&rt, spec);
+            daemon.start_or_gate(&rt, spec).await;
         }
         daemon.update_keep_awake();
         Ok(daemon)
@@ -510,12 +511,81 @@ impl Daemon {
         self.save_enabled(id, true);
         self.reload_registrations(id, &m.display_name).await?;
         self.set_progress(id, Some(format!("Starting {}", m.display_name)));
-        self.start_bridge(&rt, spec);
-        let h = rt.handle().unwrap();
-        h.wait_for(Duration::from_secs(10), |s| {
-            matches!(s, ProcState::Running { .. })
-        })
-        .await;
+        if self.start_or_gate(&rt, spec).await {
+            let h = rt.handle().unwrap();
+            h.wait_for(Duration::from_secs(10), |s| {
+                matches!(s, ProcState::Running { .. })
+            })
+            .await;
+        }
+        Ok(())
+    }
+
+    /// Start a prepared bridge, unless it has a `local_setup` whose sign-in
+    /// flow the user hasn't finished, or whose permissions are gone (it would
+    /// only exit and be restarted over and over). Returns whether it started.
+    async fn start_or_gate(&self, rt: &Arc<BridgeRuntime>, spec: ProcessSpec) -> bool {
+        if rt.manifest.local_setup.is_some() {
+            *rt.gated_spec.lock().unwrap() = Some(spec.clone());
+            if !local_setup::is_set_up(&rt.data_dir) {
+                info!(
+                    bridge = rt.manifest.id,
+                    "not started until its sign-in is done"
+                );
+                return false;
+            }
+            let problem = local_setup::start_problem(&rt.manifest, &spec.program).await;
+            let blocked = problem.is_some();
+            if let Some(p) = &problem {
+                warn!(bridge = rt.manifest.id, "not starting: {p}");
+            }
+            *rt.setup_problem.lock().unwrap() = problem;
+            if blocked {
+                return false;
+            }
+        }
+        self.start_bridge(rt, spec);
+        true
+    }
+
+    /// The sign-in flow of a `local_setup` bridge finished: remember that and
+    /// start the bridge.
+    pub fn finish_local_setup(&self, id: &str) -> Result<()> {
+        let rt = self
+            .bridge(id)
+            .with_context(|| format!("`{id}` is not enabled"))?;
+        write_private(&local_setup::marker_path(&rt.data_dir), b"1\n")?;
+        *rt.setup_problem.lock().unwrap() = None;
+        match rt.handle() {
+            Some(h) => h.start(),
+            None => {
+                let spec = rt
+                    .gated_spec
+                    .lock()
+                    .unwrap()
+                    .clone()
+                    .with_context(|| format!("`{id}` failed setup"))?;
+                self.start_bridge(&rt, spec);
+            }
+        }
+        info!(bridge = id, "sign-in done, bridge started");
+        self.update_keep_awake();
+        Ok(())
+    }
+
+    /// Sign out of a `local_setup` bridge: stop it and forget the sign-in.
+    /// Its data and chats stay; signing in again resumes.
+    pub async fn undo_local_setup(&self, id: &str) -> Result<()> {
+        let rt = self
+            .bridge(id)
+            .with_context(|| format!("`{id}` is not enabled"))?;
+        let _ = std::fs::remove_file(local_setup::marker_path(&rt.data_dir));
+        if let Some(h) = rt.handle() {
+            h.stop();
+            h.wait_for(Duration::from_secs(20), |s| *s == ProcState::Stopped)
+                .await;
+        }
+        self.update_keep_awake();
         Ok(())
     }
 
@@ -550,6 +620,7 @@ impl Daemon {
     pub async fn remove(&self, id: &str) -> Result<()> {
         let _op = self.ops.lock().await;
         if let Some(rt) = self.bridge(id)
+            && rt.manifest.local_setup.is_none()
             && matches!(rt.proc_state(), ProcState::Running { .. })
         {
             let users: Vec<String> = self.admin_list();
@@ -594,7 +665,7 @@ impl Daemon {
             .read()
             .unwrap()
             .values()
-            .any(|rt| rt.manifest.keep_awake && rt.handle().is_some());
+            .any(|rt| rt.manifest.keep_awake && rt.handle().is_some() && !rt.awaiting_setup());
         let mut ka = self.keep_awake.lock().unwrap();
         if let Some(child) = ka.as_mut()
             && child.try_wait().ok().flatten().is_some()

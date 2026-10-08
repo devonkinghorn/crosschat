@@ -12,7 +12,14 @@ import 'theme.dart';
 /// later. Shared by the desktop hover toolbar, the mobile long-press sheet
 /// and the reaction chips.
 class MessageActions {
-  const MessageActions({required this.toggleReaction, required this.isSaved, required this.toggleSaved, this.replyInThread, this.nameOf});
+  const MessageActions({
+    required this.toggleReaction,
+    required this.isSaved,
+    required this.toggleSaved,
+    this.replyInThread,
+    this.nameOf,
+    this.reactionsUnavailable,
+  });
 
   /// From [AppState] for messages of [roomId] (default: the open chat).
   /// Without [replyInThread] there's no "Reply in thread" (thread panel,
@@ -25,6 +32,7 @@ class MessageActions {
       toggleSaved: (m) => state.toggleSaved(m, roomId: room),
       replyInThread: replyInThread,
       nameOf: (id) => id == state.session?.userId ? 'You' : _nameIn(state, id),
+      reactionsUnavailable: state.reactionsUnavailable(room),
     );
   }
 
@@ -41,6 +49,12 @@ class MessageActions {
   final Future<String?> Function(Message m) toggleSaved;
   final void Function(Message m)? replyInThread;
   final String Function(String userId)? nameOf;
+
+  /// Set when reactions can't be sent in this chat (why): the quick
+  /// reactions and picker are replaced by a disabled button explaining it,
+  /// and chips only show who reacted.
+  final String? reactionsUnavailable;
+  bool get canReact => reactionsUnavailable == null;
 
   /// Messages that take reactions / actions at all.
   static bool actionable(Message m) => m.tapback == null && m.kind != 'redacted' && m.kind != 'undecryptable';
@@ -120,7 +134,14 @@ class MessageHoverToolbar extends StatelessWidget {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            for (final e in quickReactions)
+            if (!actions.canReact)
+              _ToolButton(
+                key: const Key('toolbar-reactions-unavailable'),
+                tooltip: actions.reactionsUnavailable!,
+                onPressed: null,
+                child: const Icon(Icons.add_reaction_outlined, size: 19, color: CC.textFaint),
+              ),
+            for (final e in actions.canReact ? quickReactions : const <String>[])
               _ToolButton(
                 key: Key('quick-react-$e'),
                 tooltip: reacted.contains(normalizeReactionKey(e)) ? 'Remove $e' : 'React with $e',
@@ -128,12 +149,13 @@ class MessageHoverToolbar extends StatelessWidget {
                 onPressed: () => actions.react(context, m, e),
                 child: Text(e, style: emojiStyle(17)),
               ),
-            _ToolButton(
-              key: const Key('toolbar-pick-emoji'),
-              tooltip: 'Find another reaction',
-              onPressed: () => actions.pickAndReact(context, m),
-              child: const Icon(Icons.add_reaction_outlined, size: 19, color: CC.textMuted),
-            ),
+            if (actions.canReact)
+              _ToolButton(
+                key: const Key('toolbar-pick-emoji'),
+                tooltip: 'Find another reaction',
+                onPressed: () => actions.pickAndReact(context, m),
+                child: const Icon(Icons.add_reaction_outlined, size: 19, color: CC.textMuted),
+              ),
             if (actions.replyInThread != null)
               _ToolButton(
                 key: const Key('toolbar-thread'),
@@ -157,7 +179,9 @@ class MessageHoverToolbar extends StatelessWidget {
 class _ToolButton extends StatelessWidget {
   const _ToolButton({super.key, required this.tooltip, required this.onPressed, required this.child, this.selected = false});
   final String tooltip;
-  final VoidCallback onPressed;
+
+  /// Null: disabled (the tooltip says why).
+  final VoidCallback? onPressed;
   final Widget child;
   final bool selected;
 
@@ -198,26 +222,41 @@ Future<void> showMessageActionsSheet(BuildContext context, Message m, MessageAct
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-              children: [
-                for (final e in quickReactions)
-                  _SheetEmoji(
-                    key: Key('sheet-react-$e'),
-                    selected: reacted.contains(normalizeReactionKey(e)),
-                    onTap: () => Navigator.of(context).pop('react:$e'),
-                    child: Text(e, style: emojiStyle(26)),
+          if (!actions.canReact)
+            Padding(
+              key: const Key('sheet-reactions-unavailable'),
+              padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
+              child: Row(
+                children: [
+                  const Icon(Icons.block, size: 18, color: CC.textFaint),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(actions.reactionsUnavailable!, style: const TextStyle(color: CC.textMuted, fontSize: 13)),
                   ),
-                _SheetEmoji(
-                  key: const Key('sheet-pick-emoji'),
-                  onTap: () => Navigator.of(context).pop('pick'),
-                  child: const Icon(Icons.add_reaction_outlined, color: CC.textMuted),
-                ),
-              ],
+                ],
+              ),
+            )
+          else
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: [
+                  for (final e in quickReactions)
+                    _SheetEmoji(
+                      key: Key('sheet-react-$e'),
+                      selected: reacted.contains(normalizeReactionKey(e)),
+                      onTap: () => Navigator.of(context).pop('react:$e'),
+                      child: Text(e, style: emojiStyle(26)),
+                    ),
+                  _SheetEmoji(
+                    key: const Key('sheet-pick-emoji'),
+                    onTap: () => Navigator.of(context).pop('pick'),
+                    child: const Icon(Icons.add_reaction_outlined, color: CC.textMuted),
+                  ),
+                ],
+              ),
             ),
-          ),
           const Divider(height: 1),
           if (actions.replyInThread != null)
             ListTile(

@@ -80,12 +80,30 @@ pub struct Manifest {
     /// Without an entry the plain `+15551234567` / `a@b.c` is passed.
     #[serde(default)]
     pub identifier_prefixes: BTreeMap<String, String>,
+    /// Setup crosschatd runs itself before starting the bridge, for bridges
+    /// without a bridgev2 provisioning API (`framework: legacy`): crosschatd
+    /// serves the login flow, and the process only starts once it completes.
+    #[serde(default)]
+    pub local_setup: Option<LocalSetup>,
+}
+
+/// A login flow crosschatd provides itself (see [`crate::local_setup`]).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum LocalSetup {
+    /// Messages on this Mac (mautrix-imessage's `mac` connector): Full Disk
+    /// Access to read `~/Library/Messages/chat.db`, Automation permission to
+    /// send through Messages.app. No Apple ID sign-in, no SIP changes.
+    MacMessages,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum Framework {
     Bridgev2,
+    /// A pre-bridgev2 mautrix bridge (single user, `bridge.user`, no
+    /// provisioning API). Needs `local_setup`.
+    Legacy,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -469,6 +487,17 @@ impl Manifest {
         if !self.config.is_null() && !self.config.is_mapping() {
             p.push("config must be a mapping".into());
         }
+        match (self.framework, self.local_setup) {
+            (Framework::Legacy, None) => {
+                p.push("framework `legacy` needs `local_setup` (it has no provisioning API)".into())
+            }
+            (Framework::Legacy, Some(LocalSetup::MacMessages))
+                if self.host_platforms.iter().any(|h| h != "macos") =>
+            {
+                p.push("local_setup `mac-messages` only runs on macos hosts".into())
+            }
+            _ => {}
+        }
         for req in &self.requirements {
             if req.provided_by.is_empty() {
                 p.push(format!(
@@ -518,6 +547,11 @@ impl Manifest {
     /// back to `source`).
     pub fn source_for(&self, platform: &str) -> &Source {
         self.source_overrides.get(platform).unwrap_or(&self.source)
+    }
+
+    /// A legacy bridge whose login flow crosschatd serves itself.
+    pub fn is_legacy(&self) -> bool {
+        self.framework == Framework::Legacy
     }
 
     pub fn supports_host(&self, host_os: &str) -> bool {
@@ -822,6 +856,14 @@ requirements:
         let mut checked = 0;
         for m in &all {
             for p in ["linux-amd64", "linux-arm64", "darwin-arm64", "darwin-amd64"] {
+                let host = if p.starts_with("darwin") {
+                    "macos"
+                } else {
+                    "linux"
+                };
+                if !m.supports_host(host) {
+                    continue;
+                }
                 match m.source_for(p) {
                     Source::GoBuild { .. } => panic!("{} builds from source on {p}", m.id),
                     Source::GithubRelease { repo, sha256, .. } if repo == PREBUILT_REPO => {
@@ -838,7 +880,10 @@ requirements:
                 }
             }
         }
-        assert_eq!(checked, 8, "gmessages+slack on darwin x2, groupme x4");
+        assert_eq!(
+            checked, 10,
+            "gmessages+slack+imessage-mac on darwin x2, groupme x4"
+        );
     }
 
     #[test]
@@ -846,7 +891,43 @@ requirements:
         let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../manifests");
         let all = Manifest::load_dir(&dir).expect("manifests/ should load and validate");
         let ids: Vec<_> = all.iter().map(|m| m.id.as_str()).collect();
-        assert_eq!(ids, vec!["gmessages", "groupme", "imessage", "slack"]);
+        assert_eq!(
+            ids,
+            vec!["gmessages", "groupme", "imessage", "imessage-mac", "slack"]
+        );
+    }
+
+    #[test]
+    fn mac_messages_manifest() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../manifests");
+        let m = Manifest::load(&dir.join("imessage-mac.yaml")).unwrap();
+        assert!(m.is_legacy());
+        assert_eq!(m.local_setup, Some(LocalSetup::MacMessages));
+        assert_eq!(m.network, "imessage");
+        assert_eq!(m.host_platforms, ["macos"]);
+        assert!(!m.supports_host("linux"));
+        assert_eq!(m.capabilities.reactions, Support::No);
+        assert_eq!(m.capabilities.edits, Support::No);
+        for p in ["darwin-arm64", "darwin-amd64"] {
+            assert!(m.artifact_for(p).unwrap().starts_with("mautrix-imessage-"));
+            assert_eq!(m.sha256_for(p).map(str::len), Some(64));
+        }
+        assert_eq!(m.artifact_for("linux-amd64"), None);
+        // A legacy manifest without its setup, or claiming Linux, is rejected.
+        let text = std::fs::read_to_string(dir.join("imessage-mac.yaml")).unwrap();
+        let no_setup = text.replace("local_setup: mac-messages\n", "");
+        let linux = text.replace("host_platforms: [macos]", "host_platforms: [macos, linux]");
+        for (bad, want) in [
+            (no_setup, "needs `local_setup`"),
+            (linux, "only runs on macos"),
+        ] {
+            match Manifest::from_yaml(&bad, "t") {
+                Err(ManifestError::Invalid { problems, .. }) => {
+                    assert!(problems.join("\n").contains(want), "{problems:?}")
+                }
+                other => panic!("expected invalid, got {other:?}"),
+            }
+        }
     }
 
     #[test]

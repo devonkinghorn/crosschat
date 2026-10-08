@@ -237,6 +237,7 @@ CI covers Rust fmt/clippy/test, the end-to-end smoke test, Flutter analyze/test,
 ## Network notes
 
 - **iMessage** (corten-matrix): on a Linux host it needs an Apple hardware key, extracted **once on a Mac**. The macOS app can run the upstream extractor. **Contact Key Verification must be off** on your Apple ID.
+- **iMessage (this Mac)** (mautrix-imessage's `mac` connector): no Apple ID sign-in and Contact Key Verification and SIP stay on. It reads the Messages app's database on the Mac running Crosschat and sends through Messages.app. Grant Crosschat **Full Disk Access** (System Settings → Privacy & Security) and allow it to **control Messages** when macOS asks. It can't send reactions, edits or unsend.
 - **RCS/SMS** (Google Messages): Google-account cookie login. QR pairing no longer works. **Your Android phone must stay on and online.**
 - **Slack:** an `xoxc-` token plus the `d` cookie (or email / Slack app).
 - **GroupMe:** early. No upstream releases: Crosschat's `prebuilt-v1` carries builds of a pinned commit.

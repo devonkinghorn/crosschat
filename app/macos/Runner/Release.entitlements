@@ -9,6 +9,10 @@
 	<false/>
 	<key>com.apple.security.network.client</key>
 	<true/>
+	<!-- iMessage (this Mac): sending through Messages.app with AppleScript
+	     (needed with the hardened runtime; macOS still asks the user). -->
+	<key>com.apple.security.automation.apple-events</key>
+	<true/>
 	<!-- New-chat contact picker (needed with the hardened runtime). -->
 	<key>com.apple.security.personal-information.addressbook</key>
 	<true/>

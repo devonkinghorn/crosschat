@@ -66,6 +66,9 @@ pub fn build_config(base: Option<Value>, i: &BridgeInputs) -> Result<Value> {
             .context("rendering manifest config")?;
         deep_merge(&mut cfg, &overlay);
     }
+    if i.manifest.is_legacy() {
+        return legacy_config(cfg, i);
+    }
     let s = |v: &str| Value::String(v.to_string());
     let hs = &i.cfg.homeserver;
     let r = &i.manifest.registration;
@@ -138,13 +141,93 @@ pub fn build_config(base: Option<Value>, i: &BridgeInputs) -> Result<Value> {
     Ok(cfg)
 }
 
+/// The owner a single-user (legacy) bridge belongs to: the first admin.
+pub fn legacy_owner(cfg: &Config) -> Result<&str> {
+    cfg.auth
+        .admins
+        .first()
+        .map(String::as_str)
+        .context("this network needs an owner account on the server (none is set up yet)")
+}
+
+/// Config for a pre-bridgev2 mautrix bridge: different layout
+/// (`appservice.database`, `bridge.user`), double puppeting through its own
+/// appservice token (`login_shared_secret: appservice`, which is why the
+/// owner is in its registration namespace), no provisioning API.
+fn legacy_config(mut cfg: Value, i: &BridgeInputs) -> Result<Value> {
+    let s = |v: &str| Value::String(v.to_string());
+    let hs = &i.cfg.homeserver;
+    let r = &i.manifest.registration;
+    let id = &i.manifest.id;
+    let owner = legacy_owner(i.cfg)?;
+    let managed: Vec<(&[&str], Value)> = vec![
+        (&["homeserver", "address"], s(&hs.url)),
+        (&["homeserver", "domain"], s(&hs.server_name)),
+        (&["homeserver", "software"], s("standard")),
+        // Plain HTTP appservice transactions, not the Beeper websocket.
+        (&["homeserver", "websocket_proxy"], Value::Null),
+        (
+            &["homeserver", "status_endpoint"],
+            s(&format!(
+                "{}/_crosschat/internal/bridge-status/{id}",
+                i.cfg.internal_url()
+            )),
+        ),
+        (
+            &["appservice", "address"],
+            s(&format!("http://127.0.0.1:{}", i.port)),
+        ),
+        (&["appservice", "hostname"], s("127.0.0.1")),
+        (&["appservice", "port"], Value::Number(i.port.into())),
+        (&["appservice", "id"], s(id)),
+        (&["appservice", "bot", "username"], s(&r.bot_username)),
+        (
+            &["appservice", "ephemeral_events"],
+            Value::Bool(r.ephemeral_events),
+        ),
+        (&["appservice", "as_token"], s(&i.secrets.tokens.as_token)),
+        (&["appservice", "hs_token"], s(&i.secrets.tokens.hs_token)),
+        (&["appservice", "database", "type"], s("sqlite3-fk-wal")),
+        (
+            &["appservice", "database", "uri"],
+            s(&format!(
+                "file:{}/bridge.db?_txlock=immediate",
+                i.data_dir.display()
+            )),
+        ),
+        (&["bridge", "user"], s(owner)),
+        (&["bridge", "username_template"], s(&r.username_template)),
+        (&["bridge", "login_shared_secret"], s("appservice")),
+        (&["bridge", "double_puppet_server_url"], Value::Null),
+        (
+            &["logging"],
+            serde_yaml_ng::from_str(
+                "min_level: info\nwriters:\n  - type: stdout\n    format: pretty",
+            )?,
+        ),
+    ];
+    for (path, value) in managed {
+        set_path(&mut cfg, path, value);
+    }
+    Ok(cfg)
+}
+
 pub fn registration_for(i: &BridgeInputs) -> Registration {
-    registration::generate(
+    let mut reg = registration::generate(
         i.manifest,
         &i.cfg.homeserver.server_name,
         &format!("http://127.0.0.1:{}", i.port),
         &i.secrets.tokens,
-    )
+    );
+    if i.manifest.is_legacy()
+        && let Ok(owner) = legacy_owner(i.cfg)
+    {
+        reg.namespaces.users.push(registration::Namespace {
+            exclusive: false,
+            regex: format!("^{}$", regex::escape(owner)),
+        });
+    }
+    reg
 }
 
 /// Write config + registration to the bridge data dir and to the homeserver
@@ -255,6 +338,12 @@ pub struct BridgeRuntime {
     /// Last state pushed by the bridge to the status endpoint.
     pub remote_state: Mutex<Option<serde_json::Value>>,
     pub setup_error: Mutex<Option<String>>,
+    /// Bridges with a `local_setup`: how to start the process, kept until
+    /// the user finishes the sign-in flow crosschatd serves for it.
+    pub gated_spec: Mutex<Option<ProcessSpec>>,
+    /// Why a set-up `local_setup` bridge isn't started (e.g. Full Disk
+    /// Access was turned off): shown as the account's status.
+    pub setup_problem: Mutex<Option<String>>,
     /// Set when the bridge is turned off: its health loop ends.
     pub retired: std::sync::atomic::AtomicBool,
 }
@@ -271,6 +360,8 @@ impl BridgeRuntime {
             health: Default::default(),
             remote_state: Mutex::new(None),
             setup_error: Mutex::new(None),
+            gated_spec: Mutex::new(None),
+            setup_problem: Mutex::new(None),
             retired: Default::default(),
         }
     }
@@ -286,6 +377,14 @@ impl BridgeRuntime {
 
     pub fn handle(&self) -> Option<ProcessHandle> {
         self.handle.lock().unwrap().clone()
+    }
+
+    /// A `local_setup` bridge that needs its sign-in flow (never done,
+    /// signed out, or permissions gone) before it can run.
+    pub fn awaiting_setup(&self) -> bool {
+        self.gated_spec.lock().unwrap().is_some()
+            && (!crate::local_setup::is_set_up(&self.data_dir)
+                || self.setup_problem.lock().unwrap().is_some())
     }
 
     pub fn base_url(&self) -> String {
@@ -527,6 +626,73 @@ mod tests {
             spec.args
         );
         assert!(spec.args.contains(&"/d/registration.yaml".to_string()));
+    }
+
+    #[test]
+    fn legacy_bridge_config_and_registration() {
+        let (_, c, s) = setup();
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let m = Manifest::load(&root.join("manifests/imessage-mac.yaml")).unwrap();
+        let dir = Path::new("/data/bridges/imessage-mac");
+        let i = BridgeInputs {
+            manifest: &m,
+            cfg: &c,
+            secrets: &s,
+            doublepuppet_token: "DP",
+            port: 29345,
+            data_dir: dir,
+        };
+        let cfg = build_config(None, &i).unwrap();
+        let g = |p: &[&str]| template::get_path(&cfg, p).cloned();
+        let st = |v: &str| Some(Value::String(v.into()));
+        assert_eq!(g(&["bridge", "user"]), st("@devon:example.com"));
+        assert_eq!(g(&["bridge", "login_shared_secret"]), st("appservice"));
+        assert_eq!(g(&["bridge", "username_template"]), st("imessagemac_{{.}}"));
+        assert_eq!(g(&["bridge", "displayname_template"]), st("{{.}}"));
+        assert_eq!(g(&["imessage", "platform"]), st("mac"));
+        assert_eq!(g(&["homeserver", "websocket_proxy"]), Some(Value::Null));
+        assert_eq!(
+            g(&["appservice", "port"]),
+            Some(Value::Number(29345.into()))
+        );
+        assert_eq!(g(&["appservice", "as_token"]), st("AS"));
+        assert_eq!(
+            g(&["appservice", "database", "uri"]),
+            st("file:/data/bridges/imessage-mac/bridge.db?_txlock=immediate")
+        );
+        assert_eq!(
+            g(&["bridge", "encryption", "allow"]),
+            Some(Value::Bool(false))
+        );
+        // bridgev2-only keys stay out.
+        assert_eq!(g(&["database"]), None);
+        assert_eq!(g(&["double_puppet"]), None);
+        assert_eq!(g(&["provisioning"]), None);
+        // The owner is in the namespace (non-exclusively) so the bridge can
+        // double-puppet them with its own token; nobody else is.
+        let reg = registration_for(&i);
+        let res: Vec<(regex::Regex, bool)> = reg
+            .namespaces
+            .users
+            .iter()
+            .map(|n| (regex::Regex::new(&n.regex).unwrap(), n.exclusive))
+            .collect();
+        let m = |u: &str| res.iter().find(|(r, _)| r.is_match(u)).map(|(_, e)| *e);
+        assert_eq!(m("@devon:example.com"), Some(false));
+        assert_eq!(m("@imessagemac_+15551234567:example.com"), Some(true));
+        assert_eq!(m("@imessagemacbot:example.com"), Some(true));
+        assert_eq!(m("@devonx:example.com"), None);
+        assert_eq!(m("@alice:example.com"), None);
+        // No owner yet: setup explains instead of writing a broken config.
+        let mut nobody = c.clone();
+        nobody.auth.admins.clear();
+        let i2 = BridgeInputs { cfg: &nobody, ..i };
+        assert!(
+            build_config(None, &i2)
+                .unwrap_err()
+                .to_string()
+                .contains("owner")
+        );
     }
 
     #[test]

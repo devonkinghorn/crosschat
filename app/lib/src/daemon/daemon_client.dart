@@ -195,6 +195,7 @@ class BridgeInfo {
     this.setupError,
     this.keepAwake = false,
     this.hostPlatforms = const [],
+    this.awaitingSetup = false,
   });
 
   factory BridgeInfo.fromJson(Map<String, dynamic> j) => BridgeInfo(
@@ -214,6 +215,7 @@ class BridgeInfo {
     setupError: j['setup_error'] as String?,
     keepAwake: j['keep_awake'] as bool? ?? false,
     hostPlatforms: ((j['host_platforms'] as List?) ?? []).cast<String>(),
+    awaitingSetup: j['awaiting_setup'] as bool? ?? false,
   );
 
   final String id;
@@ -241,10 +243,16 @@ class BridgeInfo {
   /// Server OSes it runs on (`linux`, `macos`).
   final List<String> hostPlatforms;
 
+  /// Enabled, and its process starts once the user finishes signing in
+  /// (crosschatd serves the sign-in itself, e.g. "iMessage (this Mac)"
+  /// checking macOS permissions).
+  final bool awaitingSetup;
+
   bool get running => processState == 'running';
 
-  /// Running and answering health checks: ready to sign in.
-  bool get ready => running && live == true;
+  /// Ready to sign in: running and answering health checks, or waiting for
+  /// its sign-in to start it.
+  bool get ready => running && live == true || awaitingSetup;
 
   /// Preflight items the user must tick off before signing in.
   List<Map<String, dynamic>> get checklist => [

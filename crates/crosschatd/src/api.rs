@@ -4,6 +4,7 @@
 use crate::auth::{AuthError, Principal, authorize, bearer, secret_eq};
 use crate::bridge::BridgeRuntime;
 use crate::daemon::Daemon;
+use crate::local_setup;
 use crate::manifest::{self, Support};
 use crate::proxy::{self, ContactResult};
 use axum::{
@@ -167,6 +168,10 @@ async fn networks(State(d): State<AppState>, headers: HeaderMap) -> Result<Json<
                 // Enabling right now: what it's doing ("Installing iMessage").
                 "progress": progress,
                 "keep_awake": m.keep_awake,
+                // Enabled, but waits for the sign-in flow crosschatd serves
+                // (`local_setup`) before its process runs: ready to sign in.
+                "awaiting_setup": rt.is_some_and(|r| r.awaiting_setup()),
+                "framework": m.framework,
                 "identifier_prefixes": m.identifier_prefixes,
                 "host_platforms": m.host_platforms,
                 "capabilities": m.capabilities,
@@ -296,6 +301,9 @@ async fn provision(
 ) -> Result<Response, ApiError> {
     let p = principal(&d, &headers).await?;
     let rt = find_bridge(&d, &id)?;
+    if rt.manifest.local_setup.is_some() {
+        return local_provision(&d, &rt, &method, &rest, &body).await;
+    }
     let url = proxy::upstream_url(rt.port, &rest, query.as_deref(), &p.user_id)
         .map_err(|e| ApiError(StatusCode::BAD_REQUEST, "M_UNRECOGNIZED", e.to_string()))?;
     let mut req = d
@@ -331,6 +339,95 @@ async fn provision(
     Ok(out.body(Body::from(bytes)).unwrap())
 }
 
+/// The provisioning API of a `local_setup` bridge, served by crosschatd
+/// (see [`local_setup`]): whoami, the sign-in flow, sign-out.
+async fn local_provision(
+    d: &Arc<Daemon>,
+    rt: &Arc<BridgeRuntime>,
+    method: &Method,
+    rest: &str,
+    body: &[u8],
+) -> Result<Response, ApiError> {
+    use crate::supervisor::ProcState;
+    let m = &rt.manifest;
+    let rest = rest.trim_matches('/');
+    let binary = || {
+        rt.gated_spec
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|s| s.program.clone())
+            .ok_or_else(|| {
+                ApiError(
+                    StatusCode::CONFLICT,
+                    "CC_NOT_INSTALLED",
+                    "bridge failed setup; see setup_error".into(),
+                )
+            })
+    };
+    let step_error = |e: String| ApiError(StatusCode::BAD_REQUEST, "M_UNKNOWN", e);
+    let segs: Vec<&str> = rest.split('/').collect();
+    let v = match (method.as_str(), segs.as_slice()) {
+        ("GET", ["v3", "whoami"]) => {
+            let logins = if local_setup::is_set_up(&rt.data_dir) {
+                let mut problem = rt.setup_problem.lock().unwrap().clone();
+                if problem.is_none()
+                    && matches!(
+                        rt.proc_state(),
+                        ProcState::Backoff { .. } | ProcState::Failed { .. }
+                    )
+                    && let Ok(b) = binary()
+                {
+                    // Crashing: say why if it's the permissions.
+                    problem = local_setup::start_problem(m, &b).await;
+                }
+                vec![local_setup::login_json(rt, problem)]
+            } else {
+                vec![]
+            };
+            local_setup::whoami(m, &d.cfg.homeserver.server_name, logins)
+        }
+        ("GET", ["v3", "login", "flows"]) => local_setup::login_flows(m),
+        ("POST", ["v3", "login", "start", flow]) if *flow == local_setup::FLOW_ID => {
+            local_setup::next_mac_step(&binary()?, &local_setup::osascript(), None)
+                .await
+                .map_err(step_error)?
+        }
+        ("POST", ["v3", "login", "step", _login, step_id, _type]) => {
+            let _ = body; // the steps have no fields
+            let next =
+                local_setup::next_mac_step(&binary()?, &local_setup::osascript(), Some(step_id))
+                    .await
+                    .map_err(step_error)?;
+            if next["type"] == "complete" {
+                d.finish_local_setup(&m.id).map_err(internal)?;
+            }
+            next
+        }
+        ("POST", ["v3", "login", "cancel", ..]) => json!({}),
+        ("POST", ["v3", "logout", who]) if *who == "all" || *who == local_setup::LOGIN_ID => {
+            d.undo_local_setup(&m.id).await.map_err(internal)?;
+            json!({})
+        }
+        _ => {
+            return Err(ApiError(
+                StatusCode::NOT_IMPLEMENTED,
+                "M_UNRECOGNIZED",
+                format!("{} doesn't support this", m.display_name),
+            ));
+        }
+    };
+    Ok(Json(v).into_response())
+}
+
+/// Bridges with a bridgev2 provisioning API (not `local_setup` ones).
+fn provisionable(d: &Daemon) -> Vec<Arc<BridgeRuntime>> {
+    d.bridge_list()
+        .into_iter()
+        .filter(|rt| rt.manifest.local_setup.is_none())
+        .collect()
+}
+
 #[derive(Deserialize)]
 struct SearchBody {
     query: String,
@@ -359,8 +456,7 @@ async fn resolve(
     Json(body): Json<ResolveBody>,
 ) -> Result<Json<Value>, ApiError> {
     let p = principal(&d, &headers).await?;
-    let bridges: Vec<_> = d
-        .bridge_list()
+    let bridges: Vec<_> = provisionable(&d)
         .into_iter()
         .filter(|rt| {
             body.bridges
@@ -483,7 +579,7 @@ async fn search(
 ) -> Result<Json<Value>, ApiError> {
     let p = principal(&d, &headers).await?;
     let q = body.query.trim().to_string();
-    let bridges = d.bridge_list();
+    let bridges = provisionable(&d);
     // search_users where the bridge has it; resolve_identifier (is this
     // phone number / email on the network?) everywhere for identifier queries.
     let futures = bridges

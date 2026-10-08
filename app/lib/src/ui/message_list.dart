@@ -120,6 +120,7 @@ class _MessageTileState extends State<MessageTile> {
       toggleSaved: a.toggleSaved,
       nameOf: a.nameOf,
       replyInThread: threadable ? (_) => widget.onOpenThread!() : null,
+      reactionsUnavailable: a.reactionsUnavailable,
     );
   }
 
@@ -292,6 +293,10 @@ class ReactionRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final a = actions;
+    // Chips toggle only where the user can react; elsewhere they just show
+    // who reacted (and say why they can't).
+    final canReact = a != null && a.canReact;
+    final why = a?.reactionsUnavailable;
     return Padding(
       padding: const EdgeInsets.only(top: 4),
       child: Wrap(
@@ -301,7 +306,8 @@ class ReactionRow extends StatelessWidget {
         children: [
           for (final r in message.reactions)
             Tooltip(
-              message: a?.reactedLabel(r) ?? '${r.count} ${r.count == 1 ? 'reaction' : 'reactions'}${r.own ? ' (including you)' : ''}',
+              message:
+                  '${a?.reactedLabel(r) ?? '${r.count} ${r.count == 1 ? 'reaction' : 'reactions'}${r.own ? ' (including you)' : ''}'}${why == null ? '' : '\n$why'}',
               child: Material(
                 color: r.own ? CC.accent.withValues(alpha: 0.22) : CC.input,
                 shape: RoundedRectangleBorder(
@@ -311,7 +317,7 @@ class ReactionRow extends StatelessWidget {
                 child: InkWell(
                   key: Key('reaction-${message.eventId}-${r.key}'),
                   borderRadius: BorderRadius.circular(10),
-                  onTap: a == null ? null : () => a.react(context, message, r.key),
+                  onTap: canReact ? () => a.react(context, message, r.key) : null,
                   child: Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
                     child: Text.rich(
@@ -329,7 +335,7 @@ class ReactionRow extends StatelessWidget {
                 ),
               ),
             ),
-          if (a != null)
+          if (canReact)
             Tooltip(
               message: 'Add reaction',
               child: Material(

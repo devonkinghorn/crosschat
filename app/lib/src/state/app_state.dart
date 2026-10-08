@@ -771,9 +771,22 @@ class AppState extends ChangeNotifier {
   /// Toggle the user's reaction [key] on [m] (in the open chat, or
   /// [roomId]): click on a chip, quick reaction or picker choice. Returns a
   /// message for the user when it didn't (fully) work.
-  Future<String?> toggleReaction(Message m, String key, {String? roomId}) {
+  Future<String?> toggleReaction(Message m, String key, {String? roomId}) async {
+    final blocked = reactionsUnavailable(roomId ?? selectedRoomId);
+    if (blocked != null) return blocked;
     final g = m.reactions.where((r) => r.matches(key)).firstOrNull;
     return react(m, key, add: !(g?.own ?? false), roomId: roomId);
+  }
+
+  /// Why the user can't react in [roomId], or null when they can: its
+  /// network's bridge can't send reactions (e.g. iMessage through Messages on
+  /// a Mac). Reactions others send still show.
+  String? reactionsUnavailable(String? roomId) {
+    if (roomId == null) return null;
+    final bridgeId = rooms.where((r) => r.roomId == roomId).firstOrNull?.bridgeId;
+    final b = bridgeId == null ? null : bridge(bridgeId);
+    if (b == null || b.capabilities['reactions'] != 'no') return null;
+    return 'Reactions can\'t be sent from Crosschat to ${b.displayName} chats. Reactions others send still show up.';
   }
 
   /// Add or remove the user's reaction: a real `m.reaction` / redaction,

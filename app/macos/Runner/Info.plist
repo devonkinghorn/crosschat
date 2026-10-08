@@ -22,6 +22,8 @@
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>$(MACOSX_DEPLOYMENT_TARGET)</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>With iMessage (this Mac), Crosschat sends your messages and attachments through the Messages app.</string>
 	<key>NSContactsUsageDescription</key>
 	<string>Crosschat shows your contacts when you start a new chat and finds them on iMessage, Google Messages and your other networks. Your contacts stay on this Mac.</string>
 	<key>NSHumanReadableCopyright</key>

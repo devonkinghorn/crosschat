@@ -28,10 +28,14 @@ Map<String, dynamic> bridgeJson(
   String? setupError,
   bool hostSupported = true,
   List<Map<String, dynamic>> preflight = const [],
+  String? network,
+  bool awaitingSetup = false,
+  Map<String, dynamic> capabilities = const {},
 }) => {
   'id': id,
   'display_name': name,
-  'network': id,
+  'network': network ?? id,
+  'awaiting_setup': awaitingSetup,
   'description': '$name description',
   'enabled': enabled,
   'maturity': id == 'imessage' ? 'beta' : 'stable',
@@ -44,7 +48,7 @@ Map<String, dynamic> bridgeJson(
   'keep_awake': id == 'imessage',
   'preflight': preflight,
   'requirements': [],
-  'capabilities': {},
+  'capabilities': capabilities,
 };
 
 const imessagePreflight = [
@@ -75,6 +79,10 @@ class FakeCrosschatd {
   bool imessageLoggedIn = false;
   bool gmessagesEnabled = true;
 
+  /// "iMessage (this Mac)": crosschatd serves its sign-in (permission checks).
+  bool macEnabled = false;
+  bool macLoggedIn = false;
+
   /// Identifiers iMessage reaches.
   Set<String> onImessage = {};
 
@@ -102,6 +110,16 @@ class FakeCrosschatd {
         'bridges': [
           bridgeJson('gmessages', 'Google Messages', enabled: gmessagesEnabled, state: gmessagesEnabled ? 'running' : null, live: gmessagesEnabled),
           imessage,
+          bridgeJson(
+            'imessage-mac',
+            'iMessage (this Mac)',
+            network: 'imessage',
+            enabled: macEnabled,
+            awaitingSetup: macEnabled && !macLoggedIn,
+            state: macLoggedIn ? 'running' : null,
+            live: macLoggedIn,
+            capabilities: {'reactions': 'no', 'edits': 'no'},
+          ),
           bridgeJson('groupme', 'GroupMe', hostSupported: false),
         ],
       });
@@ -110,6 +128,43 @@ class FakeCrosschatd {
       imessageEnabled = true;
       return ok({'ok': true, 'started': true});
     }
+    if (path == '/_crosschat/v1/bridges/imessage-mac/enable') {
+      macEnabled = true;
+      return ok({'ok': true, 'started': true});
+    }
+    // Step shapes from crosschatd's local_setup (mac-messages).
+    if (path.endsWith('/imessage-mac/provision/v3/login/flows')) {
+      return ok({
+        'flows': [
+          {'id': 'mac', 'name': 'Messages on this Mac', 'description': 'Uses the Messages app on this Mac.'},
+        ],
+      });
+    }
+    Map<String, dynamic> macStep(String id, String text, String url) => {
+      'type': 'user_input',
+      'login_id': 'mac',
+      'step_id': id,
+      'instructions': text,
+      'user_input': {'fields': []},
+      'links': [
+        {'title': 'Open settings', 'url': url},
+      ],
+    };
+    if (path.endsWith('/imessage-mac/provision/v3/login/start/mac')) {
+      return ok(macStep('app.crosschat.mac.full_disk_access', 'Crosschat needs Full Disk Access.', 'x-apple.systempreferences:fda'));
+    }
+    if (path.endsWith('/imessage-mac/provision/v3/login/step/mac/app.crosschat.mac.full_disk_access/user_input')) {
+      return ok(macStep('app.crosschat.mac.automation', 'macOS asks once whether Crosschat may control Messages.', 'x-apple.systempreferences:automation'));
+    }
+    if (path.endsWith('/imessage-mac/provision/v3/login/step/mac/app.crosschat.mac.automation/user_input')) {
+      macLoggedIn = true;
+      return ok({
+        'type': 'complete',
+        'login_id': 'mac',
+        'step_id': 'app.crosschat.mac.complete',
+        'complete': {'user_login_id': 'mac'},
+      });
+    }
     if (path == '/_crosschat/v1/bridges/gmessages/remove') {
       gmessagesEnabled = false;
       return ok({'ok': true});
@@ -117,6 +172,7 @@ class FakeCrosschatd {
     if (path.endsWith('/provision/v3/whoami')) {
       final b = path.split('/')[4];
       if (b == 'imessage') return ok(whoami('imessage', loggedIn: imessageLoggedIn));
+      if (b == 'imessage-mac') return ok(whoami('imessagemac', loggedIn: macLoggedIn));
       return ok(whoami(b));
     }
     if (path == '/_crosschat/v1/resolve') {
@@ -417,6 +473,41 @@ void main() {
     expect(d.bodiesFor('select_handle/user_input').single, {'handle': 'tel:+15550000001'});
     expect(find.textContaining('Connected!'), findsOneWidget);
     expect(state.bridge('imessage')!.ready, isTrue);
+  });
+
+  testWidgets('add iMessage (this Mac): listed separately with its limits, permission steps with settings links', (tester) async {
+    final d = FakeCrosschatd();
+    final state = await pumpApp(tester, d);
+    await tester.tap(find.byKey(const Key('rail-add')));
+    await tester.pumpAndSettle();
+    // Both iMessage options; this one says what it can't send.
+    expect(find.byKey(const Key('add-network-imessage')), findsOneWidget);
+    expect(find.byKey(const Key('add-network-imessage-mac')), findsOneWidget);
+    expect(find.text('iMessage (this Mac)'), findsOneWidget);
+    expect(find.byKey(const Key('add-network-limits-imessage-mac')), findsOneWidget);
+    expect(find.byKey(const Key('add-network-limits-imessage')), findsNothing);
+
+    // Enabled = ready to sign in, though its bridge only starts afterwards.
+    await tester.tap(find.byKey(const Key('add-network-imessage-mac')));
+    await tester.pumpAndSettle();
+    expect(state.bridge('imessage-mac')!.ready, isTrue);
+    expect(find.text('Connect iMessage (this Mac)'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('flow-mac')));
+    await tester.pumpAndSettle();
+
+    // Full Disk Access, with a button to the right System Settings pane.
+    expect(find.text('Crosschat needs Full Disk Access.'), findsOneWidget);
+    expect(find.byKey(const Key('step-link-x-apple.systempreferences:fda')), findsOneWidget);
+    await tester.tap(find.byKey(const Key('step-continue')));
+    await tester.pumpAndSettle();
+    // Automation, then connected.
+    expect(find.textContaining('control Messages'), findsOneWidget);
+    expect(find.byKey(const Key('step-link-x-apple.systempreferences:automation')), findsOneWidget);
+    await tester.tap(find.byKey(const Key('step-continue')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+    expect(find.textContaining('Connected!'), findsOneWidget);
+    expect(d.seen.where((r) => r.url.path.contains('/imessage-mac/provision/v3/login/step/')), hasLength(2));
   });
 
   testWidgets('remove a network from Settings after confirming', (tester) async {

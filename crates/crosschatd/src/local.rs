@@ -64,6 +64,10 @@ pub const EMBEDDED_MANIFESTS: &[(&str, &str)] = &[
         "imessage.yaml",
         include_str!("../../../manifests/imessage.yaml"),
     ),
+    (
+        "imessage-mac.yaml",
+        include_str!("../../../manifests/imessage-mac.yaml"),
+    ),
     ("slack.yaml", include_str!("../../../manifests/slack.yaml")),
 ];
 

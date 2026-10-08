@@ -168,6 +168,12 @@ class _AddNetworkDialogState extends State<AddNetworkDialog> {
                 key: Key('add-network-status-${b.id}'),
                 style: const TextStyle(color: CC.textMuted, fontSize: 12.5),
               ),
+              if (b.capabilities['reactions'] == 'no' && b.capabilities['edits'] == 'no')
+                Text(
+                  'Sending reactions (tapbacks), edits and unsend isn\'t supported in this mode; reactions you receive still show.',
+                  key: Key('add-network-limits-${b.id}'),
+                  style: const TextStyle(color: CC.warning, fontSize: 12),
+                ),
               if (b.keepAwake && b.hostSupported && s.isLocalSession)
                 const Text('Keeps this computer awake while connected.', style: TextStyle(color: CC.textFaint, fontSize: 12)),
               if (err != null) Text(err, style: const TextStyle(color: CC.danger, fontSize: 12.5)),

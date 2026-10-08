@@ -1,0 +1,98 @@
+# iMessage through the Messages app on this Mac (mautrix-imessage's legacy
+# `mac` connector, the BlueBubbles/AirMessage approach). It reads
+# ~/Library/Messages/chat.db (Full Disk Access) and sends through Messages.app
+# with AppleScript (Automation permission). No Apple ID sign-in, no SIP
+# changes, no private APIs, and Contact Key Verification can stay on.
+#
+# crosschatd serves its sign-in flow itself (`local_setup`: it checks the
+# permissions and only then starts the bridge), since legacy bridges have no
+# provisioning API.
+schema: crosschat.bridge/v1
+id: imessage-mac
+display_name: iMessage (this Mac)
+network: imessage
+# The app adds "sending reactions, edits and unsend isn't supported" from
+# `capabilities` below.
+description: >-
+  iMessage and SMS through the Messages app on this Mac. No Apple ID sign-in,
+  and Contact Key Verification and SIP stay on; it needs Full Disk Access and
+  permission to control Messages.
+framework: legacy
+local_setup: mac-messages
+license: AGPL-3.0
+homepage: https://github.com/mautrix/imessage
+maturity: beta
+host_platforms: [macos]
+# Upstream's CI binaries link libolm from Homebrew and are only kept as
+# expiring job artifacts, so this is Crosschat's build of the same commit
+# (the last of mautrix/imessage's master branch) by scripts/build-prebuilt.sh:
+# `-tags nocrypto`, as the bridge only talks to the homeserver on this Mac.
+source:
+  kind: github-release
+  repo: devonkinghorn/crosschat
+  version: prebuilt-v1
+  artifacts:
+    darwin-arm64: mautrix-imessage-300ba6d0e556-darwin-arm64.zst
+    darwin-amd64: mautrix-imessage-300ba6d0e556-darwin-amd64.zst
+  sha256:
+    darwin-arm64: 59f2319473fe69192f7cb4a30e4f77b5806b14d69b15b710ce77eaab58517f49
+    darwin-amd64: fb5567092b533cc68a3e541d16d7babee53060364c4616d8a744dce376489a88
+process:
+  binary: mautrix-imessage
+  # Legacy bridges fill in defaults from their built-in example config, so
+  # crosschatd only writes the keys it manages (--no-update keeps it that way).
+  args: ["-c", "{{config}}", "-r", "{{registration}}", "--no-update"]
+  default_port: 29345
+registration:
+  bot_username: imessagemacbot
+  username_template: "imessagemac_{{.}}"
+# Messages on this Mac must be running for messages to arrive.
+keep_awake: true
+config:
+  imessage:
+    platform: mac
+  bridge:
+    displayname_template: "{{.}}"
+    federate_rooms: false
+    # Plain rooms: the bridge only talks to the homeserver on this Mac, and
+    # this build has no Matrix encryption.
+    encryption:
+      allow: false
+      default: false
+    delivery_receipts: false
+    message_status_events: true
+    send_error_notices: true
+    backfill:
+      enable: true
+      initial_limit: 100
+      # Chats with messages in the last 30 days are bridged on first start.
+      initial_sync_max_age: 30
+capabilities:
+  threads: no
+  replies: no
+  reactions: no
+  edits: no
+  contacts: no
+  search_users: no
+  create_group: no
+preflight:
+  - id: messages_signed_in
+    severity: info
+    message: Messages on this Mac is signed in to iMessage (and, for SMS, Text Message Forwarding is on for this Mac on your iPhone).
+  - id: permissions
+    severity: info
+    message: >-
+      You'll give Crosschat Full Disk Access (to read your messages) and
+      permission to control Messages (to send). Crosschat never changes SIP
+      or other security settings.
+  - id: send_limits
+    severity: warning
+    message: >-
+      Text and attachments only: reactions (tapbacks), edits and unsend can't
+      be sent from Crosschat in this mode. Tapbacks people send you still show
+      up as reactions.
+  - id: stay_awake
+    severity: warning
+    message: >-
+      This Mac has to stay on and awake for messages to arrive. Crosschat keeps
+      it from going to sleep on its own while this is connected.
