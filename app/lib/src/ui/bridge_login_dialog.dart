@@ -104,6 +104,10 @@ class _BridgeLoginDialogState extends State<BridgeLoginDialog> {
     }
     _fields.clear();
     _webAuthNote = null;
+    if (step['type'] == 'complete') {
+      // Show the network in the sidebar as "Syncing chats…" right away.
+      widget.state.noteLoginCompleted(_bridgeId).ignore();
+    }
     if (step['type'] == 'display_and_wait') {
       // Nothing to collect: immediately wait for the user to act on their phone.
       Future.microtask(() => _submit({}));
@@ -274,7 +278,7 @@ class _BridgeLoginDialogState extends State<BridgeLoginDialog> {
           'cookies' => _cookies(step['cookies'] as Map<String, dynamic>),
           'complete' => const ListTile(
             leading: Icon(Icons.check_circle, color: CC.success),
-            title: Text('Connected! Your chats will appear in the sidebar shortly.'),
+            title: Text('Connected! Your chats are syncing; they appear in the sidebar as they arrive.'),
           ),
           _ => Text('This login step (${step['type']}) is not supported in the alpha yet.'),
         },

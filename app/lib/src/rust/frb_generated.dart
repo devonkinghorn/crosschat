@@ -692,8 +692,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ChatRoom dco_decode_chat_room(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 11)
-      throw Exception('unexpected arr length: expect 11 but see ${arr.length}');
+    if (arr.length != 17)
+      throw Exception('unexpected arr length: expect 17 but see ${arr.length}');
     return ChatRoom(
       roomId: dco_decode_String(arr[0]),
       name: dco_decode_String(arr[1]),
@@ -706,6 +706,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       networkId: dco_decode_opt_String(arr[8]),
       networkName: dco_decode_opt_String(arr[9]),
       threadsSupported: dco_decode_opt_box_autoadd_bool(arr[10]),
+      bridgeId: dco_decode_opt_String(arr[11]),
+      bridgeBot: dco_decode_opt_String(arr[12]),
+      protocolId: dco_decode_opt_String(arr[13]),
+      protocolName: dco_decode_opt_String(arr[14]),
+      loginId: dco_decode_opt_String(arr[15]),
+      roomType: dco_decode_opt_String(arr[16]),
     );
   }
 
@@ -964,6 +970,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_networkId = sse_decode_opt_String(deserializer);
     var var_networkName = sse_decode_opt_String(deserializer);
     var var_threadsSupported = sse_decode_opt_box_autoadd_bool(deserializer);
+    var var_bridgeId = sse_decode_opt_String(deserializer);
+    var var_bridgeBot = sse_decode_opt_String(deserializer);
+    var var_protocolId = sse_decode_opt_String(deserializer);
+    var var_protocolName = sse_decode_opt_String(deserializer);
+    var var_loginId = sse_decode_opt_String(deserializer);
+    var var_roomType = sse_decode_opt_String(deserializer);
     return ChatRoom(
       roomId: var_roomId,
       name: var_name,
@@ -976,6 +988,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       networkId: var_networkId,
       networkName: var_networkName,
       threadsSupported: var_threadsSupported,
+      bridgeId: var_bridgeId,
+      bridgeBot: var_bridgeBot,
+      protocolId: var_protocolId,
+      protocolName: var_protocolName,
+      loginId: var_loginId,
+      roomType: var_roomType,
     );
   }
 
@@ -1306,6 +1324,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_opt_String(self.networkId, serializer);
     sse_encode_opt_String(self.networkName, serializer);
     sse_encode_opt_box_autoadd_bool(self.threadsSupported, serializer);
+    sse_encode_opt_String(self.bridgeId, serializer);
+    sse_encode_opt_String(self.bridgeBot, serializer);
+    sse_encode_opt_String(self.protocolId, serializer);
+    sse_encode_opt_String(self.protocolName, serializer);
+    sse_encode_opt_String(self.loginId, serializer);
+    sse_encode_opt_String(self.roomType, serializer);
   }
 
   @protected

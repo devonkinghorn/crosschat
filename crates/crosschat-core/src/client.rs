@@ -280,14 +280,34 @@ impl CrosschatClient {
         })
     }
 
+    /// `(state_key, content)` of the state events of one type.
+    async fn state_events(room: &Room, ty: &str) -> Vec<(String, Value)> {
+        let Ok(events) = room.get_state_events(StateEventType::from(ty)).await else {
+            return Vec::new();
+        };
+        events
+            .iter()
+            .filter_map(|e| {
+                let v = match e {
+                    RawAnySyncOrStrippedState::Sync(raw) => raw_json(raw),
+                    RawAnySyncOrStrippedState::Stripped(raw) => raw_json(raw),
+                }?;
+                let key = v
+                    .get("state_key")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_owned();
+                Some((key, v.get("content")?.clone()))
+            })
+            .collect()
+    }
+
     async fn network_of(room: &Room) -> Option<NetworkInfo> {
         for ty in ["m.bridge", "uk.half-shot.bridge"] {
-            if let Some(n) = Self::state_content(room, ty)
-                .await
-                .as_ref()
-                .and_then(parse_bridge_state)
-            {
-                return Some(n);
+            for (key, content) in Self::state_events(room, ty).await {
+                if let Some(n) = parse_bridge_state(&content, Some(&key)) {
+                    return Some(n);
+                }
             }
         }
         let members = room.members_no_sync(RoomMemberships::JOIN).await.ok()?;
@@ -299,6 +319,10 @@ impl CrosschatClient {
     pub async fn rooms(&self) -> Result<Vec<RoomSummary>> {
         let mut out = Vec::new();
         for room in self.client.joined_rooms() {
+            // Spaces (e.g. a bridge's per-account space) aren't chats.
+            if room.is_space() {
+                continue;
+            }
             let room_id = room.room_id().to_string();
             let name = room
                 .display_name()

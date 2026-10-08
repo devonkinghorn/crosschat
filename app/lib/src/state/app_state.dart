@@ -8,14 +8,32 @@ import '../daemon/daemon_client.dart';
 import '../local/local_server.dart';
 import '../models.dart';
 import '../platform.dart';
+import 'network_groups.dart';
 import 'settings.dart';
 
 /// Single source of UI state. Plain ChangeNotifier; the Rust core owns the
 /// real Matrix state and pushes updates through [ChatBackend.updates].
 class AppState extends ChangeNotifier {
-  AppState({required this.backend, AppSettings? settings, PlatformCapabilities? capabilities, this.daemonHttp, this.localServer})
-    : settings = settings ?? AppSettings(),
-      capabilities = capabilities ?? PlatformCapabilities.current();
+  AppState({
+    required this.backend,
+    AppSettings? settings,
+    PlatformCapabilities? capabilities,
+    this.daemonHttp,
+    this.localServer,
+    this.accountsPollInterval = const Duration(seconds: 3),
+    DateTime Function()? clock,
+    SyncTracker? syncTracker,
+  }) : settings = settings ?? AppSettings(),
+       capabilities = capabilities ?? PlatformCapabilities.current(),
+       clock = clock ?? DateTime.now,
+       syncTracker = syncTracker ?? SyncTracker();
+
+  /// How often bridge accounts are checked while something is syncing (idle:
+  /// every [_idleAccountsPoll]). `null` = no timer (tests drive it).
+  final Duration? accountsPollInterval;
+  static const _idleAccountsPoll = Duration(seconds: 30);
+  final DateTime Function() clock;
+  final SyncTracker syncTracker;
 
   /// The this-computer-only server (desktop). Null = not available (tests,
   /// demo mode, platforms without process support).
@@ -33,8 +51,7 @@ class AppState extends ChangeNotifier {
   bool get localServerSupported => localServer?.supported ?? false;
 
   /// Logged in to the local server.
-  bool get isLocalSession =>
-      localServer != null && session != null && _sameUrl(session!.homeserver, localServer!.homeserverUrl);
+  bool get isLocalSession => localServer != null && session != null && _sameUrl(session!.homeserver, localServer!.homeserverUrl);
 
   static bool _sameUrl(String a, String b) {
     String n(String u) => u.trim().replaceAll(RegExp(r'/+$'), '').toLowerCase();
@@ -53,8 +70,23 @@ class AppState extends ChangeNotifier {
   String? error;
   String syncState = 'idle';
 
+  /// Chats (bridge spaces removed), each tagged with its rail entry.
   List<Room> rooms = [];
-  String? networkFilter; // null = all networks
+  List<Room> _rawRooms = [];
+
+  /// Rail entries: one per bridge login, with sync/health state.
+  List<NetworkGroup> networkGroups = [];
+
+  /// The user's accounts per bridge id (bridgev2 whoami via crosschatd).
+  Map<String, BridgeAccounts> accounts = {};
+
+  /// Bridges that just completed a login whose account isn't listed yet.
+  final Map<String, DateTime> _pendingLogins = {};
+  DateTime? _lastAccountsPoll;
+  Timer? _accountsTimer;
+  bool _pollingAccounts = false;
+
+  String? networkFilter; // null = all networks, else a NetworkGroup.key
   String? selectedRoomId;
   List<Message> messages = [];
   bool loadingMessages = false;
@@ -71,26 +103,112 @@ class AppState extends ChangeNotifier {
 
   Room? get selectedRoom => rooms.where((r) => r.roomId == selectedRoomId).firstOrNull;
 
-  /// Networks present in the room list (for the left rail).
-  List<String> get networks {
-    final ids = <String>{};
-    for (final r in rooms) {
-      ids.add(r.networkId ?? 'matrix');
-    }
-    const order = ['imessage', 'gmessages', 'slack', 'groupme', 'matrix'];
-    final list = ids.toList()
-      ..sort((a, b) {
-        final ia = order.indexOf(a), ib = order.indexOf(b);
-        return (ia < 0 ? 99 : ia).compareTo(ib < 0 ? 99 : ib);
-      });
-    return list;
+  /// Rail entry keys, in display order.
+  List<String> get networks => [for (final g in networkGroups) g.key];
+
+  NetworkGroup? groupFor(String? key) => key == null ? null : networkGroups.where((g) => g.key == key).firstOrNull;
+
+  List<Room> get visibleRooms => networkFilter == null ? rooms : rooms.where((r) => r.groupKey == networkFilter).toList();
+
+  int unreadFor(String key) => rooms.where((r) => r.groupKey == key).fold(0, (a, r) => a + r.unread);
+
+  /// Rebuild rooms + rail entries from the raw room list and bridge accounts.
+  void _recompute() {
+    final view = resolveNetworks(
+      _rawRooms,
+      bridges: bridges,
+      accounts: accounts,
+      pendingBridges: _pendingLogins.keys.toSet(),
+      tracker: syncTracker,
+      now: clock(),
+    );
+    rooms = view.rooms;
+    networkGroups = view.groups;
+    if (networkFilter != null && !networkGroups.any((g) => g.key == networkFilter)) networkFilter = null;
   }
 
-  List<Room> get visibleRooms =>
-      networkFilter == null ? rooms : rooms.where((r) => (r.networkId ?? 'matrix') == networkFilter).toList();
+  /// Called when a bridge login finishes: the network shows up right away as
+  /// "Syncing chats…" and fills in as the bridge creates the chats.
+  Future<void> noteLoginCompleted(String bridgeId) async {
+    _pendingLogins[bridgeId] = clock();
+    _recompute();
+    notifyListeners();
+    _ensureAccountsTimer();
+    await refreshAccounts();
+    await refreshRooms();
+  }
 
-  int unreadFor(String network) =>
-      rooms.where((r) => (r.networkId ?? 'matrix') == network).fold(0, (a, r) => a + r.unread);
+  /// Fetch the user's logins on every enabled bridge.
+  Future<void> refreshAccounts() async {
+    final d = daemon;
+    if (d == null || !daemonAvailable || _pollingAccounts) return;
+    _pollingAccounts = true;
+    final now = clock();
+    try {
+      final next = <String, BridgeAccounts>{};
+      for (final b in bridges.where((b) => b.enabled)) {
+        final prev = accounts[b.id];
+        try {
+          final j = await d.provision(b.id, 'GET', 'v3/whoami', timeout: const Duration(seconds: 8));
+          final acc = BridgeAccounts.fromWhoami(b, (j as Map).cast<String, dynamic>());
+          next[b.id] = acc;
+          _noteNewLogins(b.id, prev, acc, now);
+        } catch (e) {
+          if (prev != null && prev.logins.isNotEmpty) next[b.id] = prev.withUnreachable(b.running ? 'no answer' : 'not running');
+        }
+      }
+      accounts = next;
+      _lastAccountsPoll = now;
+      // A pending login nobody picked up (failed, or the bridge restarted).
+      _pendingLogins.removeWhere((_, since) => now.difference(since) > syncTracker.maxSync);
+    } finally {
+      _pollingAccounts = false;
+    }
+    _recompute();
+    notifyListeners();
+  }
+
+  void _noteNewLogins(String bridgeId, BridgeAccounts? prev, BridgeAccounts acc, DateTime now) {
+    final before = prev?.logins.map((l) => l.id).toSet();
+    final fresh = [
+      for (final l in acc.logins)
+        if (before != null && !before.contains(l.id)) l.id,
+    ];
+    final pending = _pendingLogins.containsKey(bridgeId);
+    if (pending && acc.logins.isNotEmpty) {
+      // Signed in from this app: the new account (or, for a re-login of the
+      // same account, every account on the bridge) is syncing.
+      for (final id in fresh.isNotEmpty ? fresh : acc.logins.map((l) => l.id)) {
+        syncTracker.start('$bridgeId/$id', _pendingLogins[bridgeId]!);
+      }
+      _pendingLogins.remove(bridgeId);
+    } else {
+      // Signed in elsewhere (another device, the bridge's bot commands).
+      for (final id in fresh) {
+        syncTracker.start('$bridgeId/$id', now);
+      }
+    }
+  }
+
+  void _ensureAccountsTimer() {
+    final interval = accountsPollInterval;
+    if (interval == null || _accountsTimer != null || !daemonAvailable) return;
+    _accountsTimer = Timer.periodic(interval, (_) => tickAccounts());
+  }
+
+  /// Periodic check: poll fast while something is syncing, slowly otherwise;
+  /// re-evaluate "syncing" (it settles once the chat count stops changing).
+  Future<void> tickAccounts() async {
+    final now = clock();
+    final busy = syncTracker.active || _pendingLogins.isNotEmpty || networkGroups.any((g) => g.busy);
+    final last = _lastAccountsPoll;
+    if (busy || last == null || now.difference(last) >= _idleAccountsPoll) {
+      await refreshAccounts();
+    } else if (syncTracker.active) {
+      _recompute();
+      notifyListeners();
+    }
+  }
 
   Future<void> init() async {
     final local = localServer;
@@ -199,9 +317,7 @@ class AppState extends ChangeNotifier {
   Future<void> connectDaemon() async {
     final s = session;
     if (s == null) return;
-    final url = isLocalSession
-        ? localServer!.daemonUrl
-        : (settings.daemonUrl.isNotEmpty ? settings.daemonUrl : s.homeserver);
+    final url = isLocalSession ? localServer!.daemonUrl : (settings.daemonUrl.isNotEmpty ? settings.daemonUrl : s.homeserver);
     final client = DaemonClient(baseUrl: url, accessToken: s.accessToken, httpClient: daemonHttp);
     daemon = client;
     daemonAvailable = await client.isAvailable();
@@ -213,6 +329,11 @@ class AppState extends ChangeNotifier {
         debugPrint('crosschatd networks failed: $e');
       }
     }
+    if (daemonAvailable) {
+      await refreshAccounts();
+      _ensureAccountsTimer();
+    }
+    _recompute();
     notifyListeners();
   }
 
@@ -271,7 +392,8 @@ class AppState extends ChangeNotifier {
 
   Future<void> refreshRooms() async {
     try {
-      rooms = await backend.rooms();
+      _rawRooms = await backend.rooms();
+      _recompute();
     } catch (e) {
       error = 'Room list failed: $e';
     }
@@ -381,6 +503,13 @@ class AppState extends ChangeNotifier {
       await backend.logout();
     } catch (_) {}
     session = null;
+    _accountsTimer?.cancel();
+    _accountsTimer = null;
+    accounts = {};
+    _pendingLogins.clear();
+    networkGroups = [];
+    networkFilter = null;
+    _rawRooms = [];
     rooms = [];
     messages = [];
     selectedRoomId = null;
@@ -395,6 +524,7 @@ class AppState extends ChangeNotifier {
   void dispose() {
     _sub?.cancel();
     _refreshDebounce?.cancel();
+    _accountsTimer?.cancel();
     super.dispose();
   }
 }

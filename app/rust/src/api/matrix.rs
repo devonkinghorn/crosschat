@@ -83,6 +83,14 @@ pub struct ChatRoom {
     pub network_id: Option<String>,
     pub network_name: Option<String>,
     pub threads_supported: Option<bool>,
+    /// Bridge identity, for grouping chats per bridge login (see
+    /// `crosschat_core::NetworkInfo`).
+    pub bridge_id: Option<String>,
+    pub bridge_bot: Option<String>,
+    pub protocol_id: Option<String>,
+    pub protocol_name: Option<String>,
+    pub login_id: Option<String>,
+    pub room_type: Option<String>,
 }
 
 pub struct DirectoryUser {
@@ -170,8 +178,14 @@ fn room(r: core::RoomSummary) -> ChatRoom {
         last_ts: r.last_ts,
         last_message: r.last_message,
         network_id: r.network.as_ref().map(|n| n.id.clone()),
-        network_name: r.network.map(|n| n.display_name),
+        network_name: r.network.as_ref().map(|n| n.display_name.clone()),
         threads_supported: r.threads_supported,
+        bridge_id: r.network.as_ref().and_then(|n| n.bridge_id.clone()),
+        bridge_bot: r.network.as_ref().and_then(|n| n.bridge_bot.clone()),
+        protocol_id: r.network.as_ref().map(|n| n.protocol_id.clone()),
+        protocol_name: r.network.as_ref().map(|n| n.protocol_name.clone()),
+        login_id: r.network.as_ref().and_then(|n| n.login_id.clone()),
+        room_type: r.network.and_then(|n| n.room_type),
     }
 }
 

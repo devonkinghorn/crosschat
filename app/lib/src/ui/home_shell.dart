@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
 
+import '../daemon/daemon_client.dart';
 import '../models.dart';
 import '../state/app_state.dart';
+import '../state/network_groups.dart';
+import 'bridge_login_dialog.dart';
 import 'channel_view.dart';
 import 'networks.dart';
 import 'new_chat_dialog.dart';
@@ -20,10 +23,12 @@ class HomeShell extends StatelessWidget {
   const HomeShell({super.key, required this.state});
   final AppState state;
 
-  void _openSettings(BuildContext context) =>
-      Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => SettingsScreen(state: state)));
+  void _openSettings(BuildContext context) => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => SettingsScreen(state: state)));
 
-  void _newChat(BuildContext context) => showDialog<void>(context: context, builder: (_) => NewChatDialog(state: state));
+  void _newChat(BuildContext context) => showDialog<void>(
+    context: context,
+    builder: (_) => NewChatDialog(state: state),
+  );
 
   @override
   Widget build(BuildContext context) {
@@ -73,7 +78,10 @@ class HomeShell extends StatelessWidget {
               ),
               if (threadInline) ...[
                 Container(width: 1, color: const Color(0xFF26282C)),
-                SizedBox(width: _threadWidth, child: ThreadPanel(state: state, onClose: state.closeThread)),
+                SizedBox(
+                  width: _threadWidth,
+                  child: ThreadPanel(state: state, onClose: state.closeThread),
+                ),
               ],
             ],
           ),
@@ -105,10 +113,7 @@ class _NarrowChannel extends StatelessWidget {
                     listenable: state,
                     builder: (context, _) => Scaffold(
                       body: SafeArea(
-                        child: ThreadPanel(
-                          state: state,
-                          onClose: () => Navigator.of(context).pop(),
-                        ),
+                        child: ThreadPanel(state: state, onClose: () => Navigator.of(context).pop()),
                       ),
                     ),
                   ),
@@ -151,15 +156,17 @@ class NetworkRail extends StatelessWidget {
           Expanded(
             child: ListView(
               children: [
-                for (final n in state.networks)
+                for (final g in state.networkGroups)
                   _RailItem(
-                    key: Key('rail-$n'),
-                    tooltip: networkStyle(n).label,
-                    selected: state.networkFilter == n,
-                    unread: state.unreadFor(n),
-                    color: networkStyle(n).color,
-                    onTap: () => state.setNetworkFilter(n),
-                    child: Icon(networkStyle(n).icon, color: Colors.white),
+                    key: Key('rail-${g.key}'),
+                    tooltip: [g.label, if (g.subtitle?.isNotEmpty ?? false) g.subtitle!, if (g.status != null) g.status!].join('\n'),
+                    selected: state.networkFilter == g.key,
+                    unread: g.unread,
+                    color: networkStyle(g.networkId).color,
+                    busy: g.busy,
+                    failing: g.failing,
+                    onTap: () => state.setNetworkFilter(g.key),
+                    child: Icon(networkStyle(g.networkId).icon, color: Colors.white),
                   ),
                 _RailItem(
                   key: const Key('rail-add'),
@@ -173,7 +180,12 @@ class NetworkRail extends StatelessWidget {
               ],
             ),
           ),
-          IconButton(key: const Key('open-settings'), tooltip: 'Settings', onPressed: onSettings, icon: const Icon(Icons.settings, color: CC.textMuted)),
+          IconButton(
+            key: const Key('open-settings'),
+            tooltip: 'Settings',
+            onPressed: onSettings,
+            icon: const Icon(Icons.settings, color: CC.textMuted),
+          ),
           const SizedBox(height: 12),
         ],
       ),
@@ -182,8 +194,20 @@ class NetworkRail extends StatelessWidget {
 }
 
 class _RailItem extends StatefulWidget {
-  const _RailItem({super.key, required this.tooltip, required this.selected, required this.unread, required this.color, required this.onTap, required this.child});
+  const _RailItem({
+    super.key,
+    required this.tooltip,
+    required this.selected,
+    required this.unread,
+    required this.color,
+    required this.onTap,
+    required this.child,
+    this.busy = false,
+    this.failing = false,
+  });
   final String tooltip;
+  final bool busy;
+  final bool failing;
   final bool selected;
   final int unread;
   final Color color;
@@ -210,7 +234,10 @@ class _RailItemState extends State<_RailItem> {
             duration: const Duration(milliseconds: 150),
             width: 4,
             height: widget.selected ? 40 : (_hover ? 20 : (widget.unread > 0 ? 8 : 0)),
-            decoration: const BoxDecoration(color: Colors.white, borderRadius: BorderRadius.horizontal(right: Radius.circular(4))),
+            decoration: const BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.horizontal(right: Radius.circular(4)),
+            ),
           ),
           Center(
             child: Tooltip(
@@ -234,8 +261,33 @@ class _RailItemState extends State<_RailItem> {
                         ),
                         child: Center(child: widget.child),
                       ),
-                      if (widget.unread > 0)
-                        Positioned(right: -4, bottom: -2, child: UnreadBadge(count: widget.unread)),
+                      if (widget.busy)
+                        const Positioned(
+                          right: -3,
+                          top: -3,
+                          child: SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(key: Key('rail-syncing'), strokeWidth: 2.2, color: Colors.white),
+                          ),
+                        ),
+                      if (widget.failing)
+                        Positioned(
+                          right: -3,
+                          top: -3,
+                          child: Container(
+                            key: const Key('rail-failing'),
+                            width: 16,
+                            height: 16,
+                            decoration: BoxDecoration(
+                              color: CC.warning,
+                              shape: BoxShape.circle,
+                              border: Border.all(color: CC.rail, width: 2),
+                            ),
+                            child: const Icon(Icons.priority_high, size: 10, color: Colors.black),
+                          ),
+                        ),
+                      if (widget.unread > 0) Positioned(right: -4, bottom: -2, child: UnreadBadge(count: widget.unread)),
                     ],
                   ),
                 ),
@@ -259,7 +311,11 @@ class ChatSidebar extends StatelessWidget {
     final rooms = state.visibleRooms;
     final groups = rooms.where((r) => !r.isDm).toList();
     final dms = rooms.where((r) => r.isDm).toList();
-    final title = state.networkFilter == null ? 'All chats' : networkStyle(state.networkFilter).label;
+    final current = state.groupFor(state.networkFilter);
+    final title = current?.label ?? 'All chats';
+    final subtitle = current?.subtitle;
+    // Status lines: the selected network's, or every network's in "All chats".
+    final statusGroups = current != null ? [if (current.status != null) current] : state.networkGroups.where((g) => g.status != null).toList();
     return Container(
       color: CC.sidebar,
       child: Column(
@@ -267,11 +323,37 @@ class ChatSidebar extends StatelessWidget {
           Container(
             height: 52,
             padding: const EdgeInsets.only(left: 16, right: 4),
-            decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: Color(0xFF1F2023)))),
+            decoration: const BoxDecoration(
+              border: Border(bottom: BorderSide(color: Color(0xFF1F2023))),
+            ),
             child: Row(
               children: [
-                Expanded(child: Text(title, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16, color: Colors.white))),
-                IconButton(key: const Key('new-chat'), tooltip: 'New message', onPressed: onNewChat, icon: const Icon(Icons.edit_square, color: CC.textMuted, size: 20)),
+                Expanded(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        title,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16, color: Colors.white),
+                      ),
+                      if (subtitle != null && subtitle.isNotEmpty)
+                        Text(
+                          subtitle,
+                          key: const Key('network-subtitle'),
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontSize: 11, color: CC.textMuted),
+                        ),
+                    ],
+                  ),
+                ),
+                IconButton(
+                  key: const Key('new-chat'),
+                  tooltip: 'New message',
+                  onPressed: onNewChat,
+                  icon: const Icon(Icons.edit_square, color: CC.textMuted, size: 20),
+                ),
               ],
             ),
           ),
@@ -282,21 +364,30 @@ class ChatSidebar extends StatelessWidget {
               padding: const EdgeInsets.all(6),
               child: const Text('Sync error, retrying…', style: TextStyle(fontSize: 12)),
             ),
+          for (final g in statusGroups) _NetworkStatusBanner(state: state, group: g, showName: current == null),
           Expanded(
             child: rooms.isEmpty
-                ? const Center(
+                ? Center(
                     child: Padding(
-                      padding: EdgeInsets.all(24),
-                      child: Text('No chats yet. Connect a network or start a new message.', textAlign: TextAlign.center, style: TextStyle(color: CC.textMuted)),
+                      padding: const EdgeInsets.all(24),
+                      child: Text(
+                        current?.busy ?? false
+                            ? 'Syncing your ${current!.label} chats. They appear here as they arrive.'
+                            : 'No chats yet. Connect a network or start a new message.',
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(color: CC.textMuted),
+                      ),
                     ),
                   )
                 : ListView(
                     padding: const EdgeInsets.symmetric(vertical: 8),
                     children: [
                       if (groups.isNotEmpty) const _SectionLabel('Channels & groups'),
-                      for (final r in groups) _RoomTile(room: r, selected: r.roomId == state.selectedRoomId, showNetwork: state.networkFilter == null, onTap: () => onSelect(r)),
+                      for (final r in groups)
+                        _RoomTile(room: r, selected: r.roomId == state.selectedRoomId, showNetwork: state.networkFilter == null, onTap: () => onSelect(r)),
                       if (dms.isNotEmpty) const _SectionLabel('Direct messages'),
-                      for (final r in dms) _RoomTile(room: r, selected: r.roomId == state.selectedRoomId, showNetwork: state.networkFilter == null, onTap: () => onSelect(r)),
+                      for (final r in dms)
+                        _RoomTile(room: r, selected: r.roomId == state.selectedRoomId, showNetwork: state.networkFilter == null, onTap: () => onSelect(r)),
                     ],
                   ),
           ),
@@ -311,7 +402,11 @@ class ChatSidebar extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(state.session?.userId ?? '', overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Colors.white)),
+                      Text(
+                        state.session?.userId ?? '',
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Colors.white),
+                      ),
                       Text(
                         state.daemonAvailable ? 'crosschatd connected' : 'Matrix only',
                         style: TextStyle(fontSize: 11, color: state.daemonAvailable ? CC.success : CC.textFaint),
@@ -328,13 +423,57 @@ class ChatSidebar extends StatelessWidget {
   }
 }
 
+/// "Syncing chats… 12 so far" / "Signed out. Sign in again." under the
+/// sidebar header.
+class _NetworkStatusBanner extends StatelessWidget {
+  const _NetworkStatusBanner({required this.state, required this.group, required this.showName});
+  final AppState state;
+  final NetworkGroup group;
+  final bool showName;
+
+  @override
+  Widget build(BuildContext context) {
+    final g = group;
+    final color = g.failing ? CC.warning : networkStyle(g.networkId).color;
+    final bridge = state.bridges.where((b) => b.id == g.bridgeId).firstOrNull;
+    final text = showName ? '${g.label}: ${g.status}' : g.status!;
+    return Container(
+      key: Key('network-status-${g.key}'),
+      width: double.infinity,
+      margin: const EdgeInsets.fromLTRB(8, 8, 8, 0),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(color: color.withValues(alpha: 0.16), borderRadius: BorderRadius.circular(6)),
+      child: Row(
+        children: [
+          if (g.busy)
+            const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
+          else
+            Icon(g.health == NetworkHealth.needsRelogin ? Icons.lock_outline : Icons.error_outline, size: 16, color: CC.warning),
+          const SizedBox(width: 8),
+          Expanded(child: Text(text, style: const TextStyle(fontSize: 12.5))),
+          if (g.health == NetworkHealth.needsRelogin && bridge != null && bridge.running)
+            TextButton(key: Key('relogin-${g.key}'), onPressed: () => _relogin(context, bridge), child: const Text('Sign in')),
+        ],
+      ),
+    );
+  }
+
+  void _relogin(BuildContext context, BridgeInfo bridge) => showDialog<void>(
+    context: context,
+    builder: (_) => BridgeLoginDialog(state: state, bridge: bridge),
+  );
+}
+
 class _SectionLabel extends StatelessWidget {
   const _SectionLabel(this.label);
   final String label;
   @override
   Widget build(BuildContext context) => Padding(
     padding: const EdgeInsets.fromLTRB(16, 12, 8, 4),
-    child: Text(label.toUpperCase(), style: const TextStyle(color: CC.textMuted, fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: 0.4)),
+    child: Text(
+      label.toUpperCase(),
+      style: const TextStyle(color: CC.textMuted, fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: 0.4),
+    ),
   );
 }
 
@@ -349,6 +488,7 @@ class _RoomTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final style = networkStyle(room.networkId);
     final bold = room.unread > 0;
+    final sub = room.subProtocol;
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 1),
       child: Material(
@@ -381,7 +521,11 @@ class _RoomTile extends StatelessWidget {
                         child: Container(
                           width: 16,
                           height: 16,
-                          decoration: BoxDecoration(color: style.color, shape: BoxShape.circle, border: Border.all(color: CC.sidebar, width: 2)),
+                          decoration: BoxDecoration(
+                            color: style.color,
+                            shape: BoxShape.circle,
+                            border: Border.all(color: CC.sidebar, width: 2),
+                          ),
                           child: Icon(style.icon, size: 8, color: Colors.white),
                         ),
                       ),
@@ -392,13 +536,43 @@ class _RoomTile extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        room.name,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(fontSize: 14.5, fontWeight: bold ? FontWeight.w700 : FontWeight.w500, color: bold || selected ? Colors.white : CC.textMuted),
+                      Row(
+                        children: [
+                          Flexible(
+                            child: Text(
+                              room.name,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: 14.5,
+                                fontWeight: bold ? FontWeight.w700 : FontWeight.w500,
+                                color: bold || selected ? Colors.white : CC.textMuted,
+                              ),
+                            ),
+                          ),
+                          if (sub != null) ...[
+                            const SizedBox(width: 6),
+                            Container(
+                              key: Key('subprotocol-${room.roomId}'),
+                              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 0.5),
+                              decoration: BoxDecoration(
+                                border: Border.all(color: CC.textFaint),
+                                borderRadius: BorderRadius.circular(3),
+                              ),
+                              child: Text(
+                                sub,
+                                style: const TextStyle(fontSize: 9.5, color: CC.textMuted, fontWeight: FontWeight.w600),
+                              ),
+                            ),
+                          ],
+                        ],
                       ),
                       if (room.lastMessage != null)
-                        Text(room.lastMessage!, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12, color: CC.textFaint)),
+                        Text(
+                          room.lastMessage!,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontSize: 12, color: CC.textFaint),
+                        ),
                     ],
                   ),
                 ),

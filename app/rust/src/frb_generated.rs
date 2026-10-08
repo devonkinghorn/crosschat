@@ -28,7 +28,7 @@
 // Section: imports
 
 use flutter_rust_bridge::for_generated::byteorder::{NativeEndian, ReadBytesExt, WriteBytesExt};
-use flutter_rust_bridge::for_generated::{Lifetimeable, Lockable, transform_result_dco};
+use flutter_rust_bridge::for_generated::{transform_result_dco, Lifetimeable, Lockable};
 use flutter_rust_bridge::{Handler, IntoIntoDart};
 
 // Section: boilerplate
@@ -692,6 +692,12 @@ impl SseDecode for crate::api::matrix::ChatRoom {
         let mut var_networkId = <Option<String>>::sse_decode(deserializer);
         let mut var_networkName = <Option<String>>::sse_decode(deserializer);
         let mut var_threadsSupported = <Option<bool>>::sse_decode(deserializer);
+        let mut var_bridgeId = <Option<String>>::sse_decode(deserializer);
+        let mut var_bridgeBot = <Option<String>>::sse_decode(deserializer);
+        let mut var_protocolId = <Option<String>>::sse_decode(deserializer);
+        let mut var_protocolName = <Option<String>>::sse_decode(deserializer);
+        let mut var_loginId = <Option<String>>::sse_decode(deserializer);
+        let mut var_roomType = <Option<String>>::sse_decode(deserializer);
         return crate::api::matrix::ChatRoom {
             room_id: var_roomId,
             name: var_name,
@@ -704,6 +710,12 @@ impl SseDecode for crate::api::matrix::ChatRoom {
             network_id: var_networkId,
             network_name: var_networkName,
             threads_supported: var_threadsSupported,
+            bridge_id: var_bridgeId,
+            bridge_bot: var_bridgeBot,
+            protocol_id: var_protocolId,
+            protocol_name: var_protocolName,
+            login_id: var_loginId,
+            room_type: var_roomType,
         };
     }
 }
@@ -1023,6 +1035,12 @@ impl flutter_rust_bridge::IntoDart for crate::api::matrix::ChatRoom {
             self.network_id.into_into_dart().into_dart(),
             self.network_name.into_into_dart().into_dart(),
             self.threads_supported.into_into_dart().into_dart(),
+            self.bridge_id.into_into_dart().into_dart(),
+            self.bridge_bot.into_into_dart().into_dart(),
+            self.protocol_id.into_into_dart().into_dart(),
+            self.protocol_name.into_into_dart().into_dart(),
+            self.login_id.into_into_dart().into_dart(),
+            self.room_type.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -1187,6 +1205,12 @@ impl SseEncode for crate::api::matrix::ChatRoom {
         <Option<String>>::sse_encode(self.network_id, serializer);
         <Option<String>>::sse_encode(self.network_name, serializer);
         <Option<bool>>::sse_encode(self.threads_supported, serializer);
+        <Option<String>>::sse_encode(self.bridge_id, serializer);
+        <Option<String>>::sse_encode(self.bridge_bot, serializer);
+        <Option<String>>::sse_encode(self.protocol_id, serializer);
+        <Option<String>>::sse_encode(self.protocol_name, serializer);
+        <Option<String>>::sse_encode(self.login_id, serializer);
+        <Option<String>>::sse_encode(self.room_type, serializer);
     }
 }
 
@@ -1389,7 +1413,7 @@ mod io {
     use flutter_rust_bridge::for_generated::byteorder::{
         NativeEndian, ReadBytesExt, WriteBytesExt,
     };
-    use flutter_rust_bridge::for_generated::{Lifetimeable, Lockable, transform_result_dco};
+    use flutter_rust_bridge::for_generated::{transform_result_dco, Lifetimeable, Lockable};
     use flutter_rust_bridge::{Handler, IntoIntoDart};
 
     // Section: boilerplate
@@ -1413,7 +1437,7 @@ mod web {
     };
     use flutter_rust_bridge::for_generated::wasm_bindgen;
     use flutter_rust_bridge::for_generated::wasm_bindgen::prelude::*;
-    use flutter_rust_bridge::for_generated::{Lifetimeable, Lockable, transform_result_dco};
+    use flutter_rust_bridge::for_generated::{transform_result_dco, Lifetimeable, Lockable};
     use flutter_rust_bridge::{Handler, IntoIntoDart};
 
     // Section: boilerplate

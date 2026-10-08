@@ -3,12 +3,7 @@
 library;
 
 class ThreadSummary {
-  const ThreadSummary({
-    required this.replyCount,
-    this.latestReplyTs,
-    this.latestReplyBody,
-    this.participants = const [],
-  });
+  const ThreadSummary({required this.replyCount, this.latestReplyTs, this.latestReplyBody, this.participants = const []});
 
   final int replyCount;
   final int? latestReplyTs;
@@ -59,6 +54,13 @@ class Room {
     this.networkId,
     this.networkName,
     this.threadsSupported,
+    this.bridgeId,
+    this.bridgeBot,
+    this.protocolId,
+    this.protocolName,
+    this.loginId,
+    this.roomType,
+    this.assignedGroup,
   });
 
   final String roomId;
@@ -78,18 +80,64 @@ class Room {
   /// From `com.beeper.room_features`; `null` = unknown.
   final bool? threadsSupported;
 
+  /// Bridge identity from the room's `m.bridge` state: appservice id, bot,
+  /// the raw per-chat protocol (Google Messages: `gmessages-rcs` /
+  /// `gmessages-sms`), the bridge login (`fi.mau.receiver`) and room type.
+  final String? bridgeId;
+  final String? bridgeBot;
+  final String? protocolId;
+  final String? protocolName;
+  final String? loginId;
+  final String? roomType;
+
+  /// Rail entry assigned by `resolveNetworks` (see [groupKey]).
+  final String? assignedGroup;
+
+  /// Network rail entry this room is listed under (one per bridge login);
+  /// defaults to the network id.
+  String get groupKey => assignedGroup ?? networkId ?? 'matrix';
+
+  /// Per-chat transport when the bridge distinguishes it, e.g. `SMS` / `RCS`
+  /// for Google Messages (from `Google Messages (SMS)` / `gmessages-sms`).
+  String? get subProtocol {
+    final name = protocolName;
+    if (name != null) {
+      final m = RegExp(r'\(([^()]{1,12})\)\s*$').firstMatch(name);
+      if (m != null) return m.group(1);
+    }
+    final pid = protocolId, net = networkId;
+    if (pid != null && net != null && pid.startsWith('$net-')) return pid.substring(net.length + 1).toUpperCase();
+    return null;
+  }
+
+  Room copyWith({String? networkId, String? networkName, String? bridgeId, String? groupKey}) => Room(
+    roomId: roomId,
+    name: name,
+    topic: topic,
+    isDm: isDm,
+    unread: unread,
+    highlights: highlights,
+    lastTs: lastTs,
+    lastMessage: lastMessage,
+    networkId: networkId ?? this.networkId,
+    networkName: networkName ?? this.networkName,
+    threadsSupported: threadsSupported,
+    bridgeId: bridgeId ?? this.bridgeId,
+    bridgeBot: bridgeBot,
+    protocolId: protocolId,
+    protocolName: protocolName,
+    loginId: loginId,
+    roomType: roomType,
+    assignedGroup: groupKey ?? assignedGroup,
+  );
+
   /// Threads are offered unless the bridge says the network can't carry them
   /// (we never fake threads that wouldn't reach the remote network).
   bool get canThread => threadsSupported ?? (networkId == null || networkId == 'slack');
 }
 
 class Session {
-  const Session({
-    required this.userId,
-    required this.deviceId,
-    required this.homeserver,
-    required this.accessToken,
-  });
+  const Session({required this.userId, required this.deviceId, required this.homeserver, required this.accessToken});
 
   final String userId;
   final String deviceId;

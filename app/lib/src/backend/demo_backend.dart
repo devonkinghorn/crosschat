@@ -182,6 +182,12 @@ class DemoBackend implements ChatBackend {
         networkId: r.networkId,
         networkName: r.networkName,
         threadsSupported: r.threadsSupported,
+        bridgeId: r.bridgeId,
+        bridgeBot: r.bridgeBot,
+        protocolId: r.protocolId,
+        protocolName: r.protocolName,
+        loginId: r.loginId,
+        roomType: r.roomType,
       );
     }
 

@@ -2,7 +2,9 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:crosschat/main.dart';
+import 'package:crosschat/src/backend/backend.dart';
 import 'package:crosschat/src/backend/demo_backend.dart';
+import 'package:crosschat/src/models.dart';
 import 'package:crosschat/src/platform.dart';
 import 'package:crosschat/src/state/app_state.dart';
 import 'package:crosschat/src/ui/bridge_login_dialog.dart';
@@ -13,6 +15,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
+
+import 'fixtures/bridge_rooms.dart';
 
 const desktop = PlatformCapabilities(
   os: 'linux',
@@ -34,8 +38,10 @@ const android = PlatformCapabilities(
 final offline = MockClient((_) async => http.Response('nope', 503));
 
 /// A fake crosschatd with one running Google Messages bridge.
-MockClient fakeDaemon(List<http.Request> seen) => MockClient((req) async {
+MockClient fakeDaemon(List<http.Request> seen, {http.Response? Function(http.Request req)? override}) => MockClient((req) async {
   seen.add(req);
+  final o = override?.call(req);
+  if (o != null) return o;
   final path = req.url.path;
   if (path == '/_crosschat/v1/health') return http.Response('{"status":"ok"}', 200);
   if (path == '/_crosschat/v1/networks') {
@@ -146,11 +152,19 @@ class FakeWebAuth implements WebAuthLauncher {
   }
 }
 
-Future<AppState> pumpApp(WidgetTester tester, {Size size = const Size(1600, 900), PlatformCapabilities caps = desktop, http.Client? daemon}) async {
+Future<AppState> pumpApp(
+  WidgetTester tester, {
+  Size size = const Size(1600, 900),
+  PlatformCapabilities caps = desktop,
+  http.Client? daemon,
+  ChatBackend? backend,
+  DateTime Function()? clock,
+}) async {
   tester.view.physicalSize = size;
   tester.view.devicePixelRatio = 1.0;
   addTearDown(tester.view.reset);
-  final state = AppState(backend: DemoBackend(), capabilities: caps, daemonHttp: daemon ?? offline);
+  // No account-poll timer in widget tests; tests call tickAccounts() themselves.
+  final state = AppState(backend: backend ?? DemoBackend(), capabilities: caps, daemonHttp: daemon ?? offline, accountsPollInterval: null, clock: clock);
   await tester.pumpWidget(CrosschatApp(state: state));
   await state.init();
   await tester.pumpAndSettle();
@@ -376,6 +390,80 @@ void main() {
     expect(fake.cancelled, isTrue);
   });
 
+  testWidgets('after connecting, Google Messages shows as one syncing entry that fills in', (tester) async {
+    var now = DateTime(2026, 10, 8, 15);
+    final backend = _GrowingBackend();
+    Map<String, dynamic>? whoami; // no login yet
+    final seen = <http.Request>[];
+    final daemon = fakeDaemon(
+      seen,
+      override: (req) => req.url.path.endsWith('/provision/v3/whoami') ? http.Response(jsonEncode(whoami ?? gmWhoami(logins: [])), 200) : null,
+    );
+    final state = await pumpApp(tester, daemon: daemon, backend: backend, clock: () => now);
+    await login(tester);
+    await tester.tap(find.byKey(const Key('open-settings')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, 'Connect').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Google account'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const Key('cookie-SID')), 'abc');
+    final submit = find.widgetWithText(FilledButton, 'Submit');
+    await tester.ensureVisible(submit);
+    await tester.tap(submit);
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Connected!'), findsOneWidget);
+    // Close the dialog and settings.
+    await tester.tapAt(const Offset(5, 5));
+    await tester.pumpAndSettle();
+    await tester.pageBack();
+    await tester.pump(const Duration(milliseconds: 500));
+
+    // 1. Instantly: the network is in the rail, syncing, before any chat exists.
+    expect(find.byKey(const Key('rail-gmessages')), findsOneWidget);
+    expect(find.byKey(const Key('rail-syncing')), findsOneWidget);
+    expect(find.byKey(const Key('network-status-gmessages')), findsOneWidget);
+    expect(find.textContaining('Google Messages: Syncing chats…'), findsOneWidget);
+
+    // The bridge lists the account and starts creating chats (RCS + SMS +
+    // its space), the way mautrix-gmessages does.
+    whoami = gmWhoami();
+    backend.extra = [for (var i = 0; i < 5; i++) gmRoom(i), gmRoom(100, sms: true), gmSpaceRoom];
+    now = now.add(const Duration(seconds: 3));
+    await state.refreshRooms();
+    await state.tickAccounts();
+    await tester.pump(const Duration(milliseconds: 500));
+    // 2. One entry, not gmessages-rcs / gmessages-sms / an empty space entry.
+    expect(find.byKey(const Key('rail-gmessages')), findsOneWidget);
+    expect(find.byKey(const Key('rail-gmessages-rcs')), findsNothing);
+    expect(find.byKey(const Key('rail-gmessages-sms')), findsNothing);
+    expect(find.textContaining('Syncing chats… 7 so far'), findsOneWidget, reason: '6 new chats + the demo one');
+    await tester.tap(find.byKey(const Key('rail-gmessages')));
+    await tester.pump(const Duration(milliseconds: 500));
+    expect(find.text('Google Messages'), findsWidgets);
+    expect(find.byKey(const Key('network-subtitle')), findsOneWidget);
+    expect(find.text('me@example.com'), findsOneWidget);
+    expect(find.byKey(const Key('room-$gmSpace')), findsNothing);
+    expect(find.byKey(const Key('subprotocol-!gm100s:localhost')), findsOneWidget);
+    expect(find.descendant(of: find.byKey(const Key('subprotocol-!gm100s:localhost')), matching: find.text('SMS')), findsOneWidget);
+
+    // Chats stop arriving: syncing clears.
+    now = now.add(const Duration(seconds: 30));
+    await state.tickAccounts();
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('rail-syncing')), findsNothing);
+    expect(find.byKey(const Key('network-status-gmessages')), findsNothing);
+
+    // Later the account gets signed out: the entry says so and offers sign-in.
+    whoami = gmWhoami(state: 'BAD_CREDENTIALS', message: 'Signed out of Google');
+    now = now.add(const Duration(seconds: 31));
+    await state.tickAccounts();
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('rail-failing')), findsOneWidget);
+    expect(find.text('Signed out of Google'), findsOneWidget);
+    expect(find.byKey(const Key('relogin-gmessages')), findsOneWidget);
+  });
+
   test('cookie paste parser', () {
     expect(parseCookiePaste('{"SID":"a","HSID":"b"}'), {'SID': 'a', 'HSID': 'b'});
     expect(parseCookiePaste('Cookie: SID=a; HSID=b=c'), {'SID': 'a', 'HSID': 'b=c'});
@@ -406,4 +494,12 @@ void main() {
     await tester.pumpAndSettle();
     expect(state.settings.persistentSync, isTrue);
   });
+}
+
+/// Demo data plus chats the "bridge" creates during the test.
+class _GrowingBackend extends DemoBackend {
+  List<Room> extra = [];
+
+  @override
+  Future<List<Room>> rooms() async => [...await super.rooms(), ...extra];
 }

@@ -57,10 +57,25 @@ pub struct Message {
 /// the ghost user namespace.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NetworkInfo {
-    /// Stable protocol id, e.g. `imessage`, `gmessages`, `slack`, `groupme`.
+    /// Network id to group by, e.g. `imessage`, `gmessages`, `slack`. Not
+    /// the raw `protocol.id`: some bridges vary that per chat (Google
+    /// Messages says `gmessages-rcs` / `gmessages-sms`), see
+    /// [`canonical_network_id`].
     pub id: String,
+    /// Network name without a per-chat qualifier ("Google Messages").
     pub display_name: String,
     pub bridge_bot: Option<String>,
+    /// Appservice id of the bridge, from a bridgev2 state key
+    /// (`<server>/<appservice id>`); crosschatd uses the bridge id.
+    pub bridge_id: Option<String>,
+    /// Raw `protocol.id` / `protocol.displayname` of this chat.
+    pub protocol_id: String,
+    pub protocol_name: String,
+    /// Bridge login (account) the chat belongs to: `channel.fi.mau.receiver`.
+    pub login_id: Option<String>,
+    /// `com.beeper.room_type.v2` (`dm`, `group_dm`, `space`,
+    /// `personal_filtering_space`, ...).
+    pub room_type: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -335,22 +350,99 @@ pub fn build_main_timeline(raw_events: &[Value], own_user: &str) -> Vec<Message>
     main
 }
 
-/// Parse an `m.bridge` / `uk.half-shot.bridge` state event content.
-pub fn parse_bridge_state(content: &Value) -> Option<NetworkInfo> {
+/// Networks whose bridges may report a sub-protocol id like `<network>-sms`.
+const KNOWN_NETWORKS: &[&str] = &[
+    "imessage",
+    "gmessages",
+    "slack",
+    "groupme",
+    "whatsapp",
+    "signal",
+    "telegram",
+    "discord",
+    "meta",
+    "instagram",
+    "facebook",
+    "twitter",
+    "linkedin",
+    "googlechat",
+    "bluesky",
+];
+
+/// The network a chat belongs to, given its `protocol.id` and the bridge's
+/// appservice id (from the state key). Google Messages labels each chat
+/// `gmessages-rcs` or `gmessages-sms` while its space says `gmessages`; all
+/// of them are one network.
+pub fn canonical_network_id(protocol_id: &str, bridge_id: Option<&str>) -> String {
+    let known = |id: &str| KNOWN_NETWORKS.contains(&id);
+    if let Some(b) = bridge_id
+        && (known(b) || protocol_id == b || protocol_id.starts_with(&format!("{b}-")))
+    {
+        return b.to_owned();
+    }
+    if let Some((base, _)) = protocol_id.split_once('-')
+        && known(base)
+    {
+        return base.to_owned();
+    }
+    // Beeper bridge types of the Go rewrites: `slackgo`, `imessagego`, ...
+    if let Some(base) = protocol_id.strip_suffix("go")
+        && known(base)
+    {
+        return base.to_owned();
+    }
+    protocol_id.to_owned()
+}
+
+/// The appservice id in a bridgev2 bridge-info state key
+/// (`<server>/<appservice id>`); legacy keys (`net.maunium.x://...`) don't
+/// carry one.
+pub fn bridge_id_from_state_key(state_key: &str) -> Option<String> {
+    if state_key.contains("://") {
+        return None;
+    }
+    let (server, id) = state_key.split_once('/')?;
+    (!server.is_empty() && !id.is_empty() && !id.contains('/')).then(|| id.to_owned())
+}
+
+/// Parse an `m.bridge` / `uk.half-shot.bridge` state event.
+pub fn parse_bridge_state(content: &Value, state_key: Option<&str>) -> Option<NetworkInfo> {
     let protocol = content.get("protocol")?;
-    let id = protocol.get("id")?.as_str()?.to_owned();
-    let display_name = protocol
+    let protocol_id = protocol.get("id")?.as_str()?.to_owned();
+    let protocol_name = protocol
         .get("displayname")
         .and_then(Value::as_str)
         .map(str::to_owned)
-        .unwrap_or_else(|| id.clone());
+        .unwrap_or_else(|| protocol_id.clone());
+    let bridge_id = state_key.and_then(bridge_id_from_state_key);
+    let id = canonical_network_id(&protocol_id, bridge_id.as_deref());
+    // "Google Messages (SMS)" -> "Google Messages" when the id was folded.
+    // ("Slack" stays "Slack".)
+    let display_name = if id != protocol_id {
+        match protocol_name.rsplit_once(" (") {
+            Some((base, rest)) if rest.ends_with(')') && !base.is_empty() => base.to_owned(),
+            _ => protocol_name.clone(),
+        }
+    } else {
+        protocol_name.clone()
+    };
+    let channel = content.get("channel");
+    let str_at = |v: Option<&Value>, k: &str| {
+        v.and_then(|v| v.get(k))
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+    };
     Some(NetworkInfo {
         id,
         display_name,
-        bridge_bot: content
-            .get("bridgebot")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
+        bridge_bot: str_at(Some(content), "bridgebot"),
+        bridge_id,
+        protocol_id,
+        protocol_name,
+        login_id: str_at(channel, "fi.mau.receiver"),
+        room_type: str_at(Some(content), "com.beeper.room_type.v2")
+            .or_else(|| str_at(Some(content), "com.beeper.room_type")),
     })
 }
 
@@ -384,7 +476,9 @@ pub fn guess_network_from_members<'a>(
                 return Some(NetworkInfo {
                     id: (*id).into(),
                     display_name: (*name).into(),
-                    bridge_bot: None,
+                    protocol_id: (*id).into(),
+                    protocol_name: (*name).into(),
+                    ..Default::default()
                 });
             }
         }
@@ -501,10 +595,72 @@ mod tests {
         );
     }
 
+    /// Shapes captured from mautrix-gmessages v0.2609 (identifiers replaced).
+    #[test]
+    fn gmessages_rcs_sms_and_space_are_one_network() {
+        let chat = |pid: &str, name: &str| {
+            json!({"bridgebot":"@gmessagesbot:localhost","creator":"@gmessagesbot:localhost",
+                "channel":{"displayname":"Family","fi.mau.receiver":"me@example.com/15550001111","id":"1.116"},
+                "protocol":{"avatar_url":"mxc://maunium.net/x","displayname":name,"external_url":"https://messages.google.com","id":pid}})
+        };
+        let rcs = parse_bridge_state(
+            &chat("gmessages-rcs", "Google Messages (RCS)"),
+            Some("localhost/gmessages"),
+        )
+        .unwrap();
+        let sms = parse_bridge_state(
+            &chat("gmessages-sms", "Google Messages (SMS)"),
+            Some("localhost/gmessages"),
+        )
+        .unwrap();
+        for n in [&rcs, &sms] {
+            assert_eq!(n.id, "gmessages");
+            assert_eq!(n.display_name, "Google Messages");
+            assert_eq!(n.bridge_id.as_deref(), Some("gmessages"));
+            assert_eq!(n.bridge_bot.as_deref(), Some("@gmessagesbot:localhost"));
+            assert_eq!(n.login_id.as_deref(), Some("me@example.com/15550001111"));
+        }
+        assert_eq!(rcs.protocol_id, "gmessages-rcs");
+        assert_eq!(sms.protocol_name, "Google Messages (SMS)");
+        let space = json!({"bridgebot":"@gmessagesbot:localhost",
+            "channel":{"fi.mau.receiver":"me@example.com/15550001111","id":"__personal_filtering_space__"},
+            "com.beeper.room_type.v2":"personal_filtering_space",
+            "protocol":{"displayname":"Google Messages","id":"gmessages"}});
+        let sp = parse_bridge_state(&space, Some("")).unwrap();
+        assert_eq!(sp.id, "gmessages");
+        assert_eq!(sp.room_type.as_deref(), Some("personal_filtering_space"));
+        // Without the state key, the known-network prefix still folds it.
+        assert_eq!(
+            parse_bridge_state(&chat("gmessages-sms", "Google Messages (SMS)"), None)
+                .unwrap()
+                .id,
+            "gmessages"
+        );
+        // Other bridges are untouched.
+        // mautrix-slack's protocol id is `slackgo`.
+        assert_eq!(canonical_network_id("slackgo", Some("slack")), "slack");
+        assert_eq!(canonical_network_id("slackgo", None), "slack");
+        assert_eq!(canonical_network_id("imessagego", None), "imessage");
+        assert_eq!(canonical_network_id("whatsapp", None), "whatsapp");
+        assert_eq!(
+            canonical_network_id("matrixhookshot", Some("hookshot")),
+            "matrixhookshot"
+        );
+        assert_eq!(
+            bridge_id_from_state_key("localhost/gmessages").as_deref(),
+            Some("gmessages")
+        );
+        assert_eq!(
+            bridge_id_from_state_key("net.maunium.whatsapp://whatsapp/123"),
+            None
+        );
+        assert_eq!(bridge_id_from_state_key(""), None);
+    }
+
     #[test]
     fn bridge_state_and_features() {
         let c = json!({"bridgebot":"@slackbot:x","protocol":{"id":"slack","displayname":"Slack"}});
-        let n = parse_bridge_state(&c).unwrap();
+        let n = parse_bridge_state(&c, None).unwrap();
         assert_eq!(n.id, "slack");
         assert_eq!(n.bridge_bot.as_deref(), Some("@slackbot:x"));
         assert_eq!(

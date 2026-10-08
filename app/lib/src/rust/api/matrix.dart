@@ -166,6 +166,15 @@ class ChatRoom {
   final String? networkName;
   final bool? threadsSupported;
 
+  /// Bridge identity, for grouping chats per bridge login (see
+  /// `crosschat_core::NetworkInfo`).
+  final String? bridgeId;
+  final String? bridgeBot;
+  final String? protocolId;
+  final String? protocolName;
+  final String? loginId;
+  final String? roomType;
+
   const ChatRoom({
     required this.roomId,
     required this.name,
@@ -178,6 +187,12 @@ class ChatRoom {
     this.networkId,
     this.networkName,
     this.threadsSupported,
+    this.bridgeId,
+    this.bridgeBot,
+    this.protocolId,
+    this.protocolName,
+    this.loginId,
+    this.roomType,
   });
 
   @override
@@ -192,7 +207,13 @@ class ChatRoom {
       lastMessage.hashCode ^
       networkId.hashCode ^
       networkName.hashCode ^
-      threadsSupported.hashCode;
+      threadsSupported.hashCode ^
+      bridgeId.hashCode ^
+      bridgeBot.hashCode ^
+      protocolId.hashCode ^
+      protocolName.hashCode ^
+      loginId.hashCode ^
+      roomType.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -209,7 +230,13 @@ class ChatRoom {
           lastMessage == other.lastMessage &&
           networkId == other.networkId &&
           networkName == other.networkName &&
-          threadsSupported == other.threadsSupported;
+          threadsSupported == other.threadsSupported &&
+          bridgeId == other.bridgeId &&
+          bridgeBot == other.bridgeBot &&
+          protocolId == other.protocolId &&
+          protocolName == other.protocolName &&
+          loginId == other.loginId &&
+          roomType == other.roomType;
 }
 
 /// Update pushed from the sync loop. `kind` is `rooms_changed`,
