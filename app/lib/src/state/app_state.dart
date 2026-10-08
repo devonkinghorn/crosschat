@@ -4,6 +4,8 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 import '../backend/backend.dart';
+import '../contacts/device_contacts.dart';
+import '../contacts/people.dart';
 import '../daemon/daemon_client.dart';
 import '../local/local_server.dart';
 import '../models.dart';
@@ -103,6 +105,13 @@ class AppState extends ChangeNotifier {
   DaemonClient? daemon;
   bool daemonAvailable = false;
   List<BridgeInfo> bridges = [];
+
+  /// This user may add and remove networks (server admin, crosschatd that
+  /// supports it).
+  bool canManageNetworks = false;
+
+  /// The server keeps its computer awake (a network like iMessage needs it).
+  bool keepingAwake = false;
 
   StreamSubscription<BackendUpdate>? _sub;
   Timer? _refreshDebounce;
@@ -383,7 +392,7 @@ class AppState extends ChangeNotifier {
     daemonAvailable = await client.isAvailable();
     if (daemonAvailable) {
       try {
-        bridges = await client.networks();
+        _applyNetworks(await client.networksInfo());
       } catch (e) {
         daemonAvailable = false;
         debugPrint('crosschatd networks failed: $e');
@@ -395,6 +404,223 @@ class AppState extends ChangeNotifier {
     }
     _recompute();
     notifyListeners();
+  }
+
+  void _applyNetworks(NetworksInfo info) {
+    bridges = info.bridges;
+    canManageNetworks = info.canManage && info.admin;
+    keepingAwake = info.keepingAwake;
+  }
+
+  BridgeInfo? bridge(String id) {
+    for (final b in bridges) {
+      if (b.id == id) return b;
+    }
+    return null;
+  }
+
+  /// Re-read the bridge list from crosschatd.
+  Future<void> refreshBridges() async {
+    final d = daemon;
+    if (d == null || !daemonAvailable) return;
+    _applyNetworks(await d.networksInfo());
+    _recompute();
+    notifyListeners();
+  }
+
+  /// Polling interval while a network is being added.
+  @visibleForTesting
+  Duration networkPollInterval = const Duration(seconds: 1);
+
+  /// "Add network": crosschatd installs the bridge (prebuilt, checksum
+  /// pinned), configures it, registers it with the homeserver (restarting
+  /// it if needed; chats reconnect by themselves) and starts it. Completes
+  /// when the bridge is ready to sign in; [bridges] shows progress meanwhile.
+  Future<BridgeInfo> enableNetwork(String id, {Duration timeout = const Duration(minutes: 8)}) async {
+    final d = daemon;
+    if (d == null || !daemonAvailable) throw StateError('crosschatd is not connected');
+    await d.bridgeAction(id, 'enable');
+    final deadline = clock().add(timeout);
+    while (true) {
+      await Future<void>.delayed(networkPollInterval);
+      BridgeInfo? b;
+      try {
+        await refreshBridges();
+        b = bridge(id);
+        if (b == null) throw NetworkSetupException('crosschatd doesn\'t know $id');
+      } on NetworkSetupException {
+        rethrow;
+      } catch (_) {
+        // The homeserver restarts while the network is added; crosschatd
+        // can't check tokens for a moment.
+      }
+      if (b != null && b.progress == null) {
+        if (b.setupError != null) throw NetworkSetupException(b.setupError!);
+        if (b.ready) {
+          await refreshAccounts();
+          _ensureAccountsTimer();
+          return b;
+        }
+      }
+      if (clock().isAfter(deadline)) {
+        throw NetworkSetupException(b?.setupError ?? 'Timed out (${b?.progress ?? b?.processState ?? 'not started'})');
+      }
+    }
+  }
+
+  /// Turn a network off. Its logins and data stay; adding it again resumes.
+  Future<void> disableNetwork(String id) async {
+    await daemon!.bridgeAction(id, 'disable');
+    accounts.remove(id);
+    await refreshBridges();
+  }
+
+  /// Sign out of a network and delete its data on the server.
+  Future<void> removeNetwork(String id) async {
+    await daemon!.bridgeAction(id, 'remove');
+    accounts.remove(id);
+    await refreshBridges();
+  }
+
+  // ---- Contacts (new chat) -------------------------------------------------
+
+  ContactsAccess contactsAccess = ContactsAccess.unsupported;
+  List<DeviceContact> deviceContactList = [];
+
+  /// Per-person network choices (Matrix account data, synced).
+  ContactNetworkPrefs networkPrefs = ContactNetworkPrefs();
+  bool _prefsLoaded = false;
+
+  /// iMessage reachability per `tel:` / `mailto:` key (null = not reachable).
+  final Map<String, Contact?> _imessageReach = {};
+
+  /// Country calling code for numbers saved without one.
+  String callingCode = callingCodeFor(PlatformDispatcher.instance.locale.countryCode);
+
+  /// Read the address book; with [ask], show the system prompt if the user
+  /// hasn't decided yet. Denied or unsupported just means no device contacts.
+  Future<void> loadDeviceContacts({bool ask = false}) async {
+    try {
+      var a = await deviceContacts.status();
+      if (ask && a == ContactsAccess.notDetermined) a = await deviceContacts.request();
+      contactsAccess = a;
+      deviceContactList = a == ContactsAccess.granted ? await deviceContacts.list() : const [];
+    } catch (e) {
+      debugPrint('contacts: $e');
+      deviceContactList = const [];
+    }
+    notifyListeners();
+  }
+
+  Future<void> loadNetworkPrefs() async {
+    if (_prefsLoaded || session == null) return;
+    try {
+      networkPrefs = ContactNetworkPrefs.fromJson(await backend.accountData(ContactNetworkPrefs.eventType));
+      _prefsLoaded = true;
+    } catch (e) {
+      debugPrint('contact network prefs: $e');
+    }
+  }
+
+  Future<void> _saveNetworkPrefs() async {
+    try {
+      await backend.setAccountData(ContactNetworkPrefs.eventType, networkPrefs.toJson());
+    } catch (e) {
+      debugPrint('saving contact network prefs: $e');
+    }
+  }
+
+  /// Bridges that are running with at least one login.
+  Set<String> get usableBridges => {
+    for (final b in bridges)
+      if (b.running && (accounts[b.id]?.logins.isNotEmpty ?? false)) b.id,
+  };
+
+  /// The `tel:` / `mailto:` key iMessage can reach [p] at, if any
+  /// (bridgev2 `resolve_identifier`, cached).
+  Future<String?> imessageIdentifier(Person p) async {
+    final d = daemon;
+    if (d == null || !usableBridges.contains('imessage')) return null;
+    for (final id in p.identifiers) {
+      if (!_imessageReach.containsKey(id)) {
+        try {
+          _imessageReach[id] = (await d.resolve(id, bridges: const ['imessage']))['imessage'];
+        } catch (e) {
+          debugPrint('iMessage lookup failed: $e');
+          continue;
+        }
+      }
+      if (_imessageReach[id] != null) return id;
+    }
+    return null;
+  }
+
+  /// Known iMessage reachability for [p] without asking: true / false, or
+  /// null when not checked yet.
+  bool? imessageReachableCached(Person p) {
+    var unknown = false;
+    for (final id in p.identifiers) {
+      if (!_imessageReach.containsKey(id)) {
+        unknown = true;
+      } else if (_imessageReach[id] != null) {
+        return true;
+      }
+    }
+    return unknown ? null : false;
+  }
+
+  /// Where a chat with [p] goes: the network the user picked for them, else
+  /// iMessage when it can reach them, else Google Messages (RCS/SMS), else
+  /// the network they were found on.
+  Future<String?> networkFor(Person p) async {
+    await loadNetworkPrefs();
+    final candidates = candidateNetworks(p, usableBridges);
+    final saved = networkPrefs.byContact[p.key];
+    if (saved != null && candidates.contains(saved)) return saved;
+    if (candidates.contains('imessage') && await imessageIdentifier(p) != null) return 'imessage';
+    for (final b in candidates) {
+      if (b != 'imessage') return b;
+    }
+    return null;
+  }
+
+  /// Remember [bridge] for [p] (synced through account data).
+  Future<void> setNetworkFor(Person p, String bridge) async {
+    await loadNetworkPrefs();
+    networkPrefs.byContact[p.key] = bridge;
+    notifyListeners();
+    await _saveNetworkPrefs();
+  }
+
+  /// Open (or create) the DM with [p] on [bridge] (default [networkFor]).
+  /// Picking a network explicitly remembers it for this person.
+  Future<void> openPerson(Person p, {String? bridge}) async {
+    final d = daemon;
+    if (d == null) throw StateError('crosschatd is not connected');
+    await loadNetworkPrefs();
+    final b = bridge ?? await networkFor(p);
+    if (b == null) throw StateError('${p.name} isn\'t reachable on a connected network');
+    final c = p.contactOn(b);
+    var roomId = c?.dmRoomMxid;
+    if (roomId == null) {
+      final ident =
+          c?.id ??
+          (b == 'imessage' ? (await imessageIdentifier(p) ?? p.identifiers.first) : (p.phones.isNotEmpty ? 'tel:${p.phones.first}' : p.identifiers.first));
+      roomId = await d.startDm(b, ident);
+    }
+    if (roomId == null) throw StateError('The bridge didn\'t return a chat');
+    networkPrefs.rooms[roomId] = p.key;
+    if (bridge != null) networkPrefs.byContact[p.key] = bridge;
+    unawaited(_saveNetworkPrefs());
+    await openPortal(roomId);
+  }
+
+  /// The person behind a DM opened from the contact picker (for the network
+  /// switcher by the composer), or null.
+  Person? personForRoom(Room room) {
+    final key = networkPrefs.rooms[room.roomId];
+    if (key == null || !(key.startsWith('tel:') || key.startsWith('mailto:'))) return null;
+    return Person(key: key, name: room.name, identifiers: {key});
   }
 
   void _onUpdate(BackendUpdate u) {
@@ -677,6 +903,11 @@ class AppState extends ChangeNotifier {
     daemon = null;
     daemonAvailable = false;
     bridges = [];
+    canManageNetworks = false;
+    keepingAwake = false;
+    networkPrefs = ContactNetworkPrefs();
+    _prefsLoaded = false;
+    _imessageReach.clear();
     notifyListeners();
   }
 
@@ -689,4 +920,11 @@ class AppState extends ChangeNotifier {
     _accountsTimer?.cancel();
     super.dispose();
   }
+}
+
+class NetworkSetupException implements Exception {
+  NetworkSetupException(this.message);
+  final String message;
+  @override
+  String toString() => message;
 }

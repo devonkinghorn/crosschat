@@ -81,6 +81,19 @@ Future<void> setMarkedUnread({required String roomId, required bool unread}) =>
       unread: unread,
     );
 
+/// The user's global account data of `event_type` as JSON, or None.
+Future<String?> getAccountData({required String eventType}) =>
+    RustLib.instance.api.crateApiMatrixGetAccountData(eventType: eventType);
+
+/// Replace the user's global account data of `event_type` (a JSON object).
+Future<void> setAccountData({
+  required String eventType,
+  required String json,
+}) => RustLib.instance.api.crateApiMatrixSetAccountData(
+  eventType: eventType,
+  json: json,
+);
+
 /// Bytes of an attachment (decrypted) or avatar. `source` is
 /// `ChatMedia::source` / `thumbnail_source` or an `mxc://` URL; with a size,
 /// a server thumbnail is requested where possible.

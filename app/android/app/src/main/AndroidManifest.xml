@@ -3,6 +3,8 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_REMOTE_MESSAGING" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- New-chat contact picker; the app works without it. -->
+    <uses-permission android:name="android.permission.READ_CONTACTS" />
     <application
         android:label="Crosschat"
         android:name="${applicationName}"

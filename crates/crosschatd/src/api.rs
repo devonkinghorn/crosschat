@@ -206,6 +206,7 @@ async fn bridge_action(
             }
             // Downloads and a homeserver restart can take a while: run in the
             // background; GET /networks shows `progress` and `setup_error`.
+            d.begin_enable(&id);
             let d2 = d.clone();
             let id2 = id.clone();
             tokio::spawn(async move {

@@ -738,6 +738,7 @@ dependencies = [
  "anyhow",
  "crosschat-core",
  "flutter_rust_bridge",
+ "serde_json",
  "tokio",
 ]
 

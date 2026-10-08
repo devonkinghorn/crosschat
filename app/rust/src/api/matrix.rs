@@ -388,6 +388,27 @@ pub async fn set_marked_unread(room_id: String, unread: bool) -> Result<()> {
     on_rt(async move { c.set_marked_unread(&room_id, unread).await }).await
 }
 
+/// The user's global account data of `event_type` as JSON, or None.
+pub async fn get_account_data(event_type: String) -> Result<Option<String>> {
+    let c = client()?;
+    on_rt(async move {
+        Ok(c.global_account_data(&event_type)
+            .await?
+            .map(|v| v.to_string()))
+    })
+    .await
+}
+
+/// Replace the user's global account data of `event_type` (a JSON object).
+pub async fn set_account_data(event_type: String, json: String) -> Result<()> {
+    let c = client()?;
+    on_rt(async move {
+        let v: serde_json::Value = serde_json::from_str(&json)?;
+        c.set_global_account_data(&event_type, &v).await
+    })
+    .await
+}
+
 /// Bytes of an attachment (decrypted) or avatar. `source` is
 /// `ChatMedia::source` / `thumbnail_source` or an `mxc://` URL; with a size,
 /// a server thumbnail is requested where possible.

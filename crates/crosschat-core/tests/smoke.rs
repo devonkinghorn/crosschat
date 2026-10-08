@@ -180,9 +180,16 @@ async fn read_receipts_clear_unread_and_marked_unread_round_trips() {
     // Opening the chat: receipt + fully_read on the latest message.
     let marked_id = bob.mark_read(&room, None).await.unwrap();
     assert_eq!(marked_id.as_deref(), Some(last.as_str()));
-    assert_eq!(unread(&bob).await, (0, false), "unread cleared by the receipt");
+    assert_eq!(
+        unread(&bob).await,
+        (0, false),
+        "unread cleared by the receipt"
+    );
     // Same receipt again is a no-op (not re-sent).
-    assert_eq!(bob.mark_read(&room, None).await.unwrap().as_deref(), Some(last.as_str()));
+    assert_eq!(
+        bob.mark_read(&room, None).await.unwrap().as_deref(),
+        Some(last.as_str())
+    );
 
     // Mark as unread / read.
     bob.set_marked_unread(&room, true).await.unwrap();
@@ -194,4 +201,31 @@ async fn read_receipts_clear_unread_and_marked_unread_round_trips() {
     alice.send_text(&room, "three", None).await.unwrap();
     let (n, _) = unread(&bob).await;
     assert_eq!(n, 1);
+}
+
+#[tokio::test]
+async fn global_account_data_follows_the_account_to_other_devices() {
+    let Some((hs, user, password)) = env() else {
+        eprintln!("skipping: CROSSCHAT_SMOKE_* not set");
+        return;
+    };
+    let (da, db) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let a = CrosschatClient::login(&hs, &user, &password, da.path(), "smoke prefs a")
+        .await
+        .unwrap();
+    let ty = "app.crosschat.contact_networks";
+    let prefs = serde_json::json!({"version": 1, "by_contact": {"tel:+15550000001": "imessage"}, "rooms": {}});
+    a.set_global_account_data(ty, &prefs).await.unwrap();
+    // A fresh device has nothing cached: read from the server.
+    let b = CrosschatClient::login(&hs, &user, &password, db.path(), "smoke prefs b")
+        .await
+        .unwrap();
+    assert_eq!(
+        b.global_account_data(ty).await.unwrap(),
+        Some(prefs.clone())
+    );
+    assert_eq!(
+        b.global_account_data("app.crosschat.unset").await.unwrap(),
+        None
+    );
 }

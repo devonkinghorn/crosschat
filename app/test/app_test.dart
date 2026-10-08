@@ -413,8 +413,8 @@ void main() {
     await tester.tap(submit);
     await tester.pumpAndSettle();
     expect(find.textContaining('Connected!'), findsOneWidget);
-    // Close the dialog and settings.
-    await tester.tapAt(const Offset(5, 5));
+    // Close the dialog (clicking outside doesn't: it would cancel a login) and settings.
+    await tester.tap(find.widgetWithText(TextButton, 'Close'));
     await tester.pumpAndSettle();
     await tester.pageBack();
     await tester.pump(const Duration(milliseconds: 500));

@@ -27,17 +27,19 @@ use matrix_sdk::{
             client::{read_marker::set_read_marker, room::create_room},
         },
         events::{
-            AnyRoomAccountDataEventContent, RoomAccountDataEventType, StateEventType,
+            AnyGlobalAccountDataEventContent, AnyRoomAccountDataEventContent,
+            GlobalAccountDataEventType, RoomAccountDataEventType, StateEventType,
             receipt::{ReceiptThread, ReceiptType},
             relation::{RelationType, Thread},
             room::{
-                MediaSource, message::{Relation, RoomMessageEventContent},
+                MediaSource,
+                message::{Relation, RoomMessageEventContent},
             },
         },
         serde::Raw,
     },
-    sync::State,
     store::RoomLoadSettings,
+    sync::State,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -224,8 +226,8 @@ impl CrosschatClient {
             let mut cache: HashMap<String, SenderProfile> = HashMap::new();
             // Reactions, edits, redactions and member changes alter messages
             // that may already be on screen.
-            let mut timeline_changed = !update.ambiguity_changes.is_empty()
-                || state_has_member(&update.state);
+            let mut timeline_changed =
+                !update.ambiguity_changes.is_empty() || state_has_member(&update.state);
             for ev in &update.timeline.events {
                 let Some(json) = raw_json(ev.raw()) else {
                     continue;
@@ -402,7 +404,9 @@ impl CrosschatClient {
             let marked_unread = match local_mark {
                 Some(v) => v,
                 None => content::marked_unread(
-                    Self::account_data_content(&room, "m.marked_unread").await.as_ref(),
+                    Self::account_data_content(&room, "m.marked_unread")
+                        .await
+                        .as_ref(),
                     Self::account_data_content(&room, "com.famedly.marked_unread")
                         .await
                         .as_ref(),
@@ -465,7 +469,8 @@ impl CrosschatClient {
                         .await
                         .ok()
                         .map(|p| {
-                            let field = |k: &str| p.get(k).and_then(Value::as_str).map(str::to_owned);
+                            let field =
+                                |k: &str| p.get(k).and_then(Value::as_str).map(str::to_owned);
                             (field("displayname"), field("avatar_url"))
                         });
                     self.profiles
@@ -583,7 +588,10 @@ impl CrosschatClient {
         };
         if let Some(target) = &target {
             let eid: OwnedEventId = <&EventId>::try_from(target.as_str())?.to_owned();
-            let own = self.client.user_id().ok_or_else(|| anyhow!("not logged in"))?;
+            let own = self
+                .client
+                .user_id()
+                .ok_or_else(|| anyhow!("not logged in"))?;
             let already = self.receipts.lock().unwrap().get(room_id) == Some(target)
                 || room
                     .load_user_receipt(ReceiptType::Read, &ReceiptThread::Unthreaded, own)
@@ -632,11 +640,42 @@ impl CrosschatClient {
         Ok(())
     }
 
+    /// The user's global account data of type `ty` (e.g. the app's per-
+    /// contact network choices), from the local store or else the server.
+    pub async fn global_account_data(&self, ty: &str) -> Result<Option<Value>> {
+        let t = GlobalAccountDataEventType::from(ty);
+        let account = self.client.account();
+        let raw = match account.account_data_raw(t.clone()).await? {
+            Some(r) => Some(r),
+            None => account.fetch_account_data(t).await?,
+        };
+        Ok(match raw {
+            Some(r) => Some(serde_json::from_str(r.json().get())?),
+            None => None,
+        })
+    }
+
+    /// Replace the user's global account data of type `ty`; it syncs to the
+    /// user's other devices.
+    pub async fn set_global_account_data(&self, ty: &str, content: &Value) -> Result<()> {
+        let raw: Raw<AnyGlobalAccountDataEventContent> =
+            Raw::from_json(serde_json::value::to_raw_value(content)?);
+        self.client
+            .account()
+            .set_account_data_raw(GlobalAccountDataEventType::from(ty), raw)
+            .await?;
+        Ok(())
+    }
+
     async fn latest_event_id(&self, room: &Room) -> Result<Option<String>> {
         let mut opts = MessagesOptions::backward();
         opts.limit = UInt::from(20u32);
         let resp = room.messages(opts).await?;
-        let raw: Vec<Value> = resp.chunk.iter().filter_map(|e| raw_json(e.raw())).collect();
+        let raw: Vec<Value> = resp
+            .chunk
+            .iter()
+            .filter_map(|e| raw_json(e.raw()))
+            .collect();
         Ok(content::pick_read_target(&raw))
     }
 
@@ -657,13 +696,17 @@ impl CrosschatClient {
     pub async fn media(&self, source: &str, thumbnail: Option<(u32, u32)>) -> Result<Vec<u8>> {
         let source = parse_media_source(source)?;
         let format = match (&source, thumbnail) {
-            (MediaSource::Plain(_), Some((w, h))) => MediaFormat::Thumbnail(
-                MediaThumbnailSettings::new(UInt::from(w), UInt::from(h)),
-            ),
+            (MediaSource::Plain(_), Some((w, h))) => {
+                MediaFormat::Thumbnail(MediaThumbnailSettings::new(UInt::from(w), UInt::from(h)))
+            }
             _ => MediaFormat::File,
         };
         let request = MediaRequestParameters { source, format };
-        Ok(self.client.media().get_media_content(&request, true).await?)
+        Ok(self
+            .client
+            .media()
+            .get_media_content(&request, true)
+            .await?)
     }
 
     /// Plain-Matrix user directory search (fallback for the new-chat dialog
@@ -730,7 +773,11 @@ fn state_has_member(state: &State) -> bool {
     };
     events.iter().any(|e| {
         raw_json(e)
-            .and_then(|v| v.get("type").and_then(Value::as_str).map(|t| t == "m.room.member"))
+            .and_then(|v| {
+                v.get("type")
+                    .and_then(Value::as_str)
+                    .map(|t| t == "m.room.member")
+            })
             .unwrap_or(false)
     })
 }

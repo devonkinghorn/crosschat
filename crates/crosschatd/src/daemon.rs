@@ -443,6 +443,18 @@ impl Daemon {
     /// Turn a bridge on: install the prebuilt binary, write its config and
     /// registration, make the homeserver load it, start it. Progress is in
     /// [`Daemon::progress_of`]; failures in `setup_error`/`enable_errors`.
+    /// Mark `id` as being enabled right away (before [`Daemon::enable`] runs
+    /// in the background), so `GET /networks` never shows a stale error.
+    pub fn begin_enable(&self, id: &str) {
+        if let Some(m) = self.manifest(id) {
+            self.enable_errors.lock().unwrap().remove(id);
+            if let Some(rt) = self.bridge(id) {
+                *rt.setup_error.lock().unwrap() = None;
+            }
+            self.set_progress(id, Some(format!("Starting {}", m.display_name)));
+        }
+    }
+
     pub async fn enable(&self, id: &str) -> Result<()> {
         let _op = self.ops.lock().await;
         let m = self
@@ -456,6 +468,7 @@ impl Daemon {
             if let Some(h) = rt.handle() {
                 h.start();
             }
+            self.set_progress(id, None);
             return Ok(());
         }
         self.enable_errors.lock().unwrap().remove(id);

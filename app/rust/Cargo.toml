@@ -15,6 +15,7 @@ flutter_rust_bridge = "=2.13.0"
 crosschat-core = { path = "../../crates/crosschat-core" }
 anyhow.workspace = true
 tokio.workspace = true
+serde_json.workspace = true
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(frb_expand)'] }

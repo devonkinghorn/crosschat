@@ -38,6 +38,10 @@ class _BridgeLoginDialogState extends State<BridgeLoginDialog> {
   bool _busy = false;
   final Map<String, TextEditingController> _fields = {};
 
+  /// Checklist items (preflight with `confirm`) the user ticked.
+  final Set<String> _checked = {};
+  bool get _checklistDone => widget.bridge.checklist.every((p) => _checked.contains(p['id']));
+
   /// Embedded sign-in window: available on this device, and currently open.
   bool _webAuthOk = false;
   bool _webAuthOpen = false;
@@ -185,7 +189,13 @@ class _BridgeLoginDialogState extends State<BridgeLoginDialog> {
                   ],
                 ),
                 const SizedBox(height: 12),
-                for (final p in widget.bridge.preflight) _preflight(p),
+                if (widget.bridge.checklist.isNotEmpty && _step == null) ...[
+                  const Text('Before you start', style: TextStyle(fontWeight: FontWeight.w700)),
+                  for (final p in widget.bridge.checklist) _checkItem(p),
+                  const SizedBox(height: 8),
+                ],
+                for (final p in widget.bridge.preflight)
+                  if (p['confirm'] != true) _preflight(p),
                 for (final r in widget.bridge.requirements) _requirement(r),
                 const SizedBox(height: 8),
                 _body(),
@@ -204,6 +214,28 @@ class _BridgeLoginDialogState extends State<BridgeLoginDialog> {
           ),
         ),
       ),
+    );
+  }
+
+  Widget _checkItem(Map<String, dynamic> p) {
+    final id = p['id'] as String;
+    return CheckboxListTile(
+      key: Key('check-$id'),
+      contentPadding: EdgeInsets.zero,
+      controlAffinity: ListTileControlAffinity.leading,
+      dense: true,
+      value: _checked.contains(id),
+      onChanged: (v) => setState(() => v == true ? _checked.add(id) : _checked.remove(id)),
+      title: Text(p['message'] as String? ?? id, style: const TextStyle(fontSize: 13)),
+      subtitle: p['link'] is String
+          ? Align(
+              alignment: Alignment.centerLeft,
+              child: InkWell(
+                onTap: () => launchUrl(Uri.parse(p['link'] as String)),
+                child: const Text('How to check', style: TextStyle(color: CC.link, fontSize: 12)),
+              ),
+            )
+          : null,
     );
   }
 
@@ -249,14 +281,23 @@ class _BridgeLoginDialogState extends State<BridgeLoginDialog> {
       return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const Text('Choose how to sign in:', style: TextStyle(color: CC.textMuted)),
+          Text(
+            _checklistDone ? 'Choose how to sign in:' : 'Tick the checklist above, then choose how to sign in:',
+            key: const Key('flows-hint'),
+            style: const TextStyle(color: CC.textMuted),
+          ),
           const SizedBox(height: 8),
-          for (final f in flows)
+          for (final (i, f) in flows.indexed)
             Card(
               color: CC.input,
               child: ListTile(
+                key: Key('flow-${f['id']}'),
+                enabled: _checklistDone && !_busy,
                 title: Text(f['name'] as String? ?? f['id'] as String),
-                subtitle: Text(f['description'] as String? ?? '', style: const TextStyle(color: CC.textMuted)),
+                subtitle: Text(
+                  '${i == 0 && flows.length > 1 ? 'Recommended. ' : ''}${f['description'] as String? ?? ''}',
+                  style: const TextStyle(color: CC.textMuted),
+                ),
                 trailing: const Icon(Icons.chevron_right),
                 onTap: () => _start(f['id'] as String),
               ),
@@ -286,28 +327,66 @@ class _BridgeLoginDialogState extends State<BridgeLoginDialog> {
     );
   }
 
+  static bool _isCode(Map<String, dynamic> f) => f['type'] == '2fa_code' || f['id'] == 'code';
+
+  static TextInputType _keyboard(Map<String, dynamic> f) => switch (f['type']) {
+    'phone_number' => TextInputType.phone,
+    'email' => TextInputType.emailAddress,
+    'url' || 'domain' => TextInputType.url,
+    _ => _isCode(f) ? TextInputType.number : TextInputType.text,
+  };
+
+  static Iterable<String>? _autofill(Map<String, dynamic> f) => switch (f['type']) {
+    'email' => const [AutofillHints.email, AutofillHints.username],
+    'username' => const [AutofillHints.username],
+    'password' => f['id'] == 'password' ? const [AutofillHints.password] : null,
+    'phone_number' => const [AutofillHints.telephoneNumber],
+    _ => _isCode(f) ? const [AutofillHints.oneTimeCode] : null,
+  };
+
   Widget _userInput(Map<String, dynamic> params) {
     final fields = ((params['fields'] as List?) ?? []).cast<Map<String, dynamic>>();
+    void submit() => _submit({for (final f in fields) f['id'] as String: _ctrl(f['id'] as String).text});
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        for (final f in fields) ...[
+        for (final (i, f) in fields.indexed) ...[
           Text(
             f['name'] as String? ?? f['id'] as String,
             style: const TextStyle(color: CC.textMuted, fontSize: 12, fontWeight: FontWeight.w600),
           ),
           const SizedBox(height: 4),
           if (f['type'] == 'select')
-            DropdownButtonFormField<String>(
-              initialValue: _ctrl(f['id'] as String, f['default_value'] as String?).text.isEmpty ? null : _ctrl(f['id'] as String).text,
-              items: [for (final o in ((f['options'] as List?) ?? []).cast<String>()) DropdownMenuItem(value: o, child: Text(o))],
-              onChanged: (v) => _ctrl(f['id'] as String).text = v ?? '',
+            Builder(
+              builder: (context) {
+                final options = ((f['options'] as List?) ?? []).cast<String>();
+                final c = _ctrl(f['id'] as String, (f['default_value'] as String?) ?? (options.length == 1 ? options.first : null));
+                return DropdownButtonFormField<String>(
+                  key: Key('field-${f['id']}'),
+                  initialValue: c.text.isEmpty ? null : c.text,
+                  isExpanded: true,
+                  items: [
+                    for (final o in options)
+                      DropdownMenuItem(
+                        value: o,
+                        child: Text(o, overflow: TextOverflow.ellipsis),
+                      ),
+                  ],
+                  onChanged: (v) => c.text = v ?? '',
+                );
+              },
             )
           else
             TextField(
+              key: Key('field-${f['id']}'),
               controller: _ctrl(f['id'] as String, f['default_value'] as String?),
+              autofocus: i == 0,
               obscureText: const {'password', 'token'}.contains(f['type']),
-              keyboardType: f['type'] == 'phone_number' ? TextInputType.phone : TextInputType.text,
+              keyboardType: _keyboard(f),
+              autofillHints: _autofill(f),
+              autocorrect: false,
+              textInputAction: i == fields.length - 1 ? TextInputAction.done : TextInputAction.next,
+              onSubmitted: i == fields.length - 1 && !_busy ? (_) => submit() : null,
               decoration: InputDecoration(helperText: f['description'] as String?),
             ),
           if (f['id'] == 'hardware_key')
@@ -330,9 +409,19 @@ class _BridgeLoginDialogState extends State<BridgeLoginDialog> {
           const SizedBox(height: 12),
         ],
         FilledButton(
-          onPressed: _busy ? null : () => _submit({for (final f in fields) f['id'] as String: _ctrl(f['id'] as String).text}),
+          key: const Key('step-continue'),
+          onPressed: _busy ? null : submit,
           child: _busy ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)) : const Text('Continue'),
         ),
+        if (_busy)
+          const Padding(
+            padding: EdgeInsets.only(top: 8),
+            child: Text(
+              'This can take a minute…',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: CC.textFaint, fontSize: 12),
+            ),
+          ),
       ],
     );
   }

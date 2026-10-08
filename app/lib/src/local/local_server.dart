@@ -18,6 +18,8 @@ class LocalServerStatus {
     this.serverName = 'localhost',
     this.homeserverUrl = LocalServerController.defaultHomeserverUrl,
     this.daemonUrl = LocalServerController.defaultDaemonUrl,
+    this.exe,
+    this.exeMtimeMs,
   });
 
   factory LocalServerStatus.fromJson(Map<String, dynamic> j) => LocalServerStatus(
@@ -29,6 +31,8 @@ class LocalServerStatus {
     serverName: j['server_name'] as String? ?? 'localhost',
     homeserverUrl: j['homeserver_url'] as String? ?? LocalServerController.defaultHomeserverUrl,
     daemonUrl: j['daemon_url'] as String? ?? LocalServerController.defaultDaemonUrl,
+    exe: j['exe'] as String?,
+    exeMtimeMs: (j['exe_mtime_ms'] as num?)?.toInt(),
   );
 
   /// `starting`, `ready` or `failed`.
@@ -40,6 +44,11 @@ class LocalServerStatus {
   final String serverName;
   final String homeserverUrl;
   final String daemonUrl;
+
+  /// The running crosschatd's binary and its modification time when it
+  /// started (null from builds before the app could upgrade it).
+  final String? exe;
+  final int? exeMtimeMs;
 
   bool get ready => phase == 'ready';
   bool get failed => phase == 'failed';
@@ -138,26 +147,30 @@ List<String> crosschatdCandidates({
 String? findCrosschatd() {
   if (kIsWeb) return null;
   bool exists(String p) => File(p).existsSync();
-  final candidates = crosschatdCandidates(
-    env: Platform.environment,
-    executable: Platform.resolvedExecutable,
-    cwd: Directory.current.path,
-    exists: exists,
-  );
+  final candidates = crosschatdCandidates(env: Platform.environment, executable: Platform.resolvedExecutable, cwd: Directory.current.path, exists: exists);
   for (final c in candidates) {
     if (exists(c)) return c;
   }
   return null;
 }
 
+/// A crosschatd is already running for our data dir: should the app restart
+/// it with [binaryMtime] (the binary it would start now)? Yes when that
+/// binary is newer than the one running, or the running one is too old to
+/// say (no `exe_mtime_ms`). Restarting keeps all data: the homeserver,
+/// bridges and their logins pick up where they left off.
+bool shouldUpgradeLocalServer(LocalServerStatus running, DateTime? binaryMtime) {
+  if (binaryMtime == null) return false;
+  final was = running.exeMtimeMs;
+  if (was == null) return true;
+  return binaryMtime.millisecondsSinceEpoch > was + 2000;
+}
+
 /// The real thing: spawns `crosschatd local --dir <AppPaths.localServer>`
 /// detached, so bridges keep running after the window closes, and talks to
 /// it over HTTP on 127.0.0.1.
 class ProcessLocalServer implements LocalServerController {
-  ProcessLocalServer({http.Client? client, String? dir, String? binary})
-    : _http = client ?? http.Client(),
-      _dirOverride = dir,
-      _binaryOverride = binary;
+  ProcessLocalServer({http.Client? client, String? dir, String? binary}) : _http = client ?? http.Client(), _dirOverride = dir, _binaryOverride = binary;
 
   final http.Client _http;
   final String? _dirOverride;
@@ -220,16 +233,21 @@ class ProcessLocalServer implements LocalServerController {
     final dir = await dataDir();
     var s = await _status();
     if (s != null && s.dataDir != null && s.dataDir != dir) {
-      throw LocalServerException(
-        'Another Crosschat server is already running on ${Uri.parse(daemonUrl).authority} (data in ${s.dataDir}). Quit it first.',
-      );
+      throw LocalServerException('Another Crosschat server is already running on ${Uri.parse(daemonUrl).authority} (data in ${s.dataDir}). Quit it first.');
+    }
+    final bin = _binaryOverride ?? findCrosschatd();
+    if (s != null && bin != null && shouldUpgradeLocalServer(s, _mtime(bin))) {
+      // The app was updated: restart the server with its crosschatd.
+      debugPrint('restarting crosschatd ${s.exe ?? ''} to update it to $bin');
+      onProgress?.call(const LocalServerStatus(phase: 'starting', detail: 'Updating the server'));
+      await stop();
+      s = await _status();
     }
     if (s != null) {
       // Already running for our data dir (e.g. left running by the last session).
       onProgress?.call(s);
       if (s.ready) return s;
     } else {
-      final bin = _binaryOverride ?? findCrosschatd();
       if (bin == null) {
         throw LocalServerException(
           'Couldn\'t find crosschatd. Build it with `cargo build --release -p crosschatd` in the Crosschat checkout, '
@@ -257,6 +275,14 @@ class ProcessLocalServer implements LocalServerController {
         if (s.failed) throw LocalServerException(s.error ?? 'The local server failed to start (see $dir/crosschatd.log)');
       }
       await Future<void>.delayed(const Duration(milliseconds: 700));
+    }
+  }
+
+  static DateTime? _mtime(String path) {
+    try {
+      return File(path).statSync().modified;
+    } catch (_) {
+      return null;
     }
   }
 
@@ -290,8 +316,11 @@ class ProcessLocalServer implements LocalServerController {
     } catch (_) {
       return;
     }
-    for (var i = 0; i < 40; i++) {
-      if (await _status() == null) return;
+    // The API goes away first; crosschatd then stops its bridges and the
+    // homeserver and removes its pid file last.
+    final pidFile = File('$dir/crosschatd.pid');
+    for (var i = 0; i < 90; i++) {
+      if (await _status() == null && !await pidFile.exists()) return;
       await Future<void>.delayed(const Duration(milliseconds: 500));
     }
   }

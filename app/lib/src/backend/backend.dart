@@ -36,4 +36,8 @@ abstract class ChatBackend {
   Future<String> createDm(String userId);
   Future<String> createGroup(String name, List<String> invites);
   Future<String> joinRoom(String idOrAlias);
+
+  /// The user's global account data of [type] (synced across devices).
+  Future<Map<String, dynamic>?> accountData(String type);
+  Future<void> setAccountData(String type, Map<String, dynamic> content);
 }

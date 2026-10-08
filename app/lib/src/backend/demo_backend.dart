@@ -241,4 +241,13 @@ class DemoBackend implements ChatBackend {
 
   @override
   Future<String> joinRoom(String idOrAlias) async => idOrAlias;
+
+  /// Global account data written so far (tests inspect it).
+  final Map<String, Map<String, dynamic>> accountDataStore = {};
+
+  @override
+  Future<Map<String, dynamic>?> accountData(String type) async => accountDataStore[type];
+
+  @override
+  Future<void> setAccountData(String type, Map<String, dynamic> content) async => accountDataStore[type] = content;
 }

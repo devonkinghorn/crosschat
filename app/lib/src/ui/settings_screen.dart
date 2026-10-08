@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../daemon/daemon_client.dart';
 import '../state/app_state.dart';
-import 'bridge_login_dialog.dart';
+import 'add_network_dialog.dart';
 import 'networks.dart';
 import 'theme.dart';
 
@@ -105,7 +105,28 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       style: const TextStyle(color: CC.textMuted),
                     ),
                   ),
-                  for (final b in s.bridges) _bridgeTile(b),
+                  for (final b in s.bridges.where((b) => b.enabled)) _bridgeTile(b),
+                  if (s.daemonAvailable)
+                    ListTile(
+                      key: const Key('settings-add-network'),
+                      leading: const Icon(Icons.add_circle_outline, color: CC.success),
+                      title: const Text('Add network'),
+                      subtitle: Text(
+                        [
+                          for (final b in s.bridges)
+                            if (!b.enabled && b.hostSupported) b.displayName,
+                        ].join(' · '),
+                        style: const TextStyle(color: CC.textMuted),
+                      ),
+                      onTap: () => showAddNetwork(context, s),
+                    ),
+                  if (s.keepingAwake)
+                    const ListTile(
+                      key: Key('keeping-awake'),
+                      dense: true,
+                      leading: Icon(Icons.coffee_rounded, color: CC.textMuted, size: 18),
+                      title: Text('Keeping this computer awake for iMessage (the screen can still turn off; closing the lid sleeps it).'),
+                    ),
                   _section('Background sync'),
                   SwitchListTile(
                     key: const Key('persistent-sync'),
@@ -180,17 +201,61 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ],
         ],
       ),
-      subtitle: Text('${b.enabled ? status : 'disabled'}${b.live == true ? ' · live' : ''}', style: const TextStyle(color: CC.textMuted)),
-      trailing: FilledButton.tonal(
-        onPressed: b.running
-            ? () => showDialog<void>(
-                context: context,
-                builder: (_) => BridgeLoginDialog(state: s, bridge: b),
-              )
-            : null,
-        child: const Text('Connect'),
+      subtitle: Text(
+        b.progress ?? b.setupError ?? '${b.enabled ? status : 'disabled'}${b.live == true ? ' · live' : ''}',
+        style: TextStyle(color: b.setupError != null && b.progress == null ? CC.danger : CC.textMuted),
+      ),
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          FilledButton.tonal(key: Key('connect-${b.id}'), onPressed: b.running ? () => showBridgeLogin(context, s, b) : null, child: const Text('Connect')),
+          if (s.canManageNetworks)
+            PopupMenuButton<String>(
+              key: Key('network-menu-${b.id}'),
+              tooltip: 'More',
+              onSelected: (a) => _manage(b, a),
+              itemBuilder: (_) => const [
+                PopupMenuItem(value: 'disable', child: Text('Turn off (keeps sign-in and chats)')),
+                PopupMenuItem(value: 'remove', child: Text('Remove… (signs out, deletes its data)')),
+              ],
+            ),
+        ],
       ),
     );
+  }
+
+  Future<void> _manage(BridgeInfo b, String action) async {
+    if (action == 'remove') {
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: Text('Remove ${b.displayName}?'),
+          content: Text(
+            'This signs out of ${b.displayName} and deletes the bridge\'s data on ${s.isLocalSession ? 'this computer' : 'the server'}. '
+            'Chats already in Crosschat stay, but stop updating. You can add it again later.',
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+            FilledButton(
+              key: const Key('confirm-remove'),
+              style: FilledButton.styleFrom(backgroundColor: CC.danger),
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Remove'),
+            ),
+          ],
+        ),
+      );
+      if (ok != true) return;
+    }
+    try {
+      if (action == 'remove') {
+        await s.removeNetwork(b.id);
+      } else {
+        await s.disableNetwork(b.id);
+      }
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
+    }
   }
 
   Widget _cap(String label, bool on) => ListTile(

@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -159,4 +160,15 @@ class FfiBackend implements ChatBackend {
 
   @override
   Future<String> joinRoom(String idOrAlias) => rs.joinRoom(roomIdOrAlias: idOrAlias);
+
+  @override
+  Future<Map<String, dynamic>?> accountData(String type) async {
+    final json = await rs.getAccountData(eventType: type);
+    if (json == null) return null;
+    final v = jsonDecode(json);
+    return v is Map ? v.cast<String, dynamic>() : null;
+  }
+
+  @override
+  Future<void> setAccountData(String type, Map<String, dynamic> content) => rs.setAccountData(eventType: type, json: jsonEncode(content));
 }

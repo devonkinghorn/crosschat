@@ -13,6 +13,7 @@ class MainFlutterWindow: NSWindow {
     RegisterGeneratedPlugins(registry: flutterViewController)
     WebAuthWindow.register(with: flutterViewController.engine.binaryMessenger)
     ImageConverter.register(with: flutterViewController.engine.binaryMessenger)
+    ContactsChannel.register(with: flutterViewController.engine.binaryMessenger)
 
     super.awakeFromNib()
   }

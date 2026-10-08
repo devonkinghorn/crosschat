@@ -4,6 +4,7 @@ import '../daemon/daemon_client.dart';
 import '../models.dart';
 import '../state/app_state.dart';
 import '../state/network_groups.dart';
+import 'add_network_dialog.dart';
 import 'bridge_login_dialog.dart';
 import 'channel_view.dart';
 import 'networks.dart';
@@ -35,7 +36,12 @@ class HomeShell extends StatelessWidget {
     return LayoutBuilder(
       builder: (context, c) {
         final narrow = c.maxWidth < 720;
-        final rail = NetworkRail(state: state, onSettings: () => _openSettings(context), onNewChat: () => _newChat(context));
+        final rail = NetworkRail(
+          state: state,
+          onSettings: () => _openSettings(context),
+          onNewChat: () => _newChat(context),
+          onAddNetwork: () => state.daemonAvailable ? showAddNetwork(context, state) : _openSettings(context),
+        );
         if (narrow) {
           return Scaffold(
             backgroundColor: CC.rail,
@@ -129,10 +135,11 @@ class _NarrowChannel extends StatelessWidget {
 }
 
 class NetworkRail extends StatelessWidget {
-  const NetworkRail({super.key, required this.state, required this.onSettings, required this.onNewChat});
+  const NetworkRail({super.key, required this.state, required this.onSettings, required this.onNewChat, this.onAddNetwork});
   final AppState state;
   final VoidCallback onSettings;
   final VoidCallback onNewChat;
+  final VoidCallback? onAddNetwork;
 
   @override
   Widget build(BuildContext context) {
@@ -170,11 +177,11 @@ class NetworkRail extends StatelessWidget {
                   ),
                 _RailItem(
                   key: const Key('rail-add'),
-                  tooltip: 'Connect a network',
+                  tooltip: 'Add a network',
                   selected: false,
                   unread: 0,
                   color: CC.sidebar,
-                  onTap: onSettings,
+                  onTap: onAddNetwork ?? onSettings,
                   child: const Icon(Icons.add, color: CC.success),
                 ),
               ],

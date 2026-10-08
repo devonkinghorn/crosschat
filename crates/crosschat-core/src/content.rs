@@ -115,7 +115,12 @@ pub fn collect_reactions(raw_events: &[Value], own_user: &str) -> HashMap<String
         ) else {
             continue;
         };
-        add_reaction(out.entry(target.to_owned()).or_default(), key, sender, own_user);
+        add_reaction(
+            out.entry(target.to_owned()).or_default(),
+            key,
+            sender,
+            own_user,
+        );
     }
     out
 }
@@ -126,7 +131,10 @@ pub fn add_reaction(groups: &mut Vec<Reaction>, key: &str, sender: &str, own_use
     let group = match groups.iter().position(|g| g.key == key) {
         Some(i) => &mut groups[i],
         None => {
-            groups.push(Reaction { key: key.clone(), ..Default::default() });
+            groups.push(Reaction {
+                key: key.clone(),
+                ..Default::default()
+            });
             groups.last_mut().unwrap()
         }
     };
@@ -341,9 +349,9 @@ pub fn fallback_name(user_id: &str) -> String {
 /// share it, Matrix users get their MXID appended (bridge ghosts don't: their
 /// MXIDs are meaningless). Falls back to [`fallback_name`].
 pub fn display_name_for(user_id: &str, display_name: Option<&str>, ambiguous: bool) -> String {
-    let name = display_name.map(str::trim).filter(|n| {
-        !n.is_empty() && *n != user_id && !(n.starts_with('@') && n.contains(':'))
-    });
+    let name = display_name
+        .map(str::trim)
+        .filter(|n| !n.is_empty() && *n != user_id && !(n.starts_with('@') && n.contains(':')));
     match name {
         Some(n) if ambiguous && !is_ghost(user_id) => format!("{n} ({user_id})"),
         Some(n) => n.to_owned(),
@@ -460,7 +468,10 @@ mod tests {
         let vid = by_id(&tl, "$vid1");
         assert_eq!(vid.kind, MessageKind::Video);
         assert_eq!(vid.media.as_ref().unwrap().size, Some(16205603));
-        assert_eq!(by_id(&tl, "$pdf1").media.as_ref().unwrap().filename, "menu.pdf");
+        assert_eq!(
+            by_id(&tl, "$pdf1").media.as_ref().unwrap().filename,
+            "menu.pdf"
+        );
     }
 
     #[test]
@@ -470,7 +481,10 @@ mod tests {
               "info":{"mimetype":"image/png","w":640,"h":480,"thumbnail_url":"mxc://x/thumb"}}});
         let m = parse_event(&ev, ME).unwrap().media.unwrap();
         assert_eq!(m.source, r#"{"url":"mxc://x/cat"}"#);
-        assert_eq!(m.thumbnail_source.as_deref(), Some(r#"{"url":"mxc://x/thumb"}"#));
+        assert_eq!(
+            m.thumbnail_source.as_deref(),
+            Some(r#"{"url":"mxc://x/thumb"}"#)
+        );
     }
 
     #[test]
@@ -482,7 +496,10 @@ mod tests {
         assert_eq!(t1.reactions[0].key, "👍");
         assert_eq!(t1.reactions[0].senders.len(), 2);
         assert!(t1.reactions[0].own);
-        assert!(tl.iter().all(|m| m.event_id != "$r1"), "reactions aren't messages");
+        assert!(
+            tl.iter().all(|m| m.event_id != "$r1"),
+            "reactions aren't messages"
+        );
     }
 
     #[test]
@@ -497,7 +514,10 @@ mod tests {
         assert_eq!(love.target_text.as_deref(), Some("Dinner at 7 on Sunday?"));
         let google = t("$tb3").unwrap();
         assert_eq!(google.key, "👍");
-        assert_eq!(google.target_text.as_deref(), Some("Dinner at 7 on Sunday?"));
+        assert_eq!(
+            google.target_text.as_deref(),
+            Some("Dinner at 7 on Sunday?")
+        );
         assert_eq!(t("$tb4").unwrap().key, "‼️");
         assert_eq!(t("$tb5").unwrap().key, "📚");
         assert!(t("$t2").is_none(), "ordinary text starting with a verb");
@@ -511,9 +531,24 @@ mod tests {
         assert_eq!(r.key, "❤️");
         let q = parse_tapback("Questioned “this is a very long message that got cut…”").unwrap();
         assert!(q.truncated);
-        assert_eq!(q.target_text.as_deref(), Some("this is a very long message that got cut"));
-        assert_eq!(parse_tapback("Liked a video").unwrap().target_kind.as_deref(), Some("video"));
-        assert_eq!(parse_tapback("Liked \"plain quotes\"").unwrap().target_text.as_deref(), Some("plain quotes"));
+        assert_eq!(
+            q.target_text.as_deref(),
+            Some("this is a very long message that got cut")
+        );
+        assert_eq!(
+            parse_tapback("Liked a video")
+                .unwrap()
+                .target_kind
+                .as_deref(),
+            Some("video")
+        );
+        assert_eq!(
+            parse_tapback("Liked \"plain quotes\"")
+                .unwrap()
+                .target_text
+                .as_deref(),
+            Some("plain quotes")
+        );
         assert!(parse_tapback("Liked it").is_none());
         assert!(parse_tapback("Reacted to the news").is_none());
         assert!(parse_tapback("\u{200b}hello\u{200b} to “x”").is_none());
@@ -521,19 +556,41 @@ mod tests {
 
     #[test]
     fn ghost_names_never_show_mxids() {
-        assert_eq!(display_name_for("@gmessages_1.14:localhost", Some("Alex Rivera"), false), "Alex Rivera");
-        // No display name yet: never the raw MXID.
-        assert_eq!(fallback_name("@gmessages_1.14:localhost"), "Unknown contact");
-        assert_eq!(display_name_for("@gmessages_1.14:localhost", None, false), "Unknown contact");
         assert_eq!(
-            display_name_for("@gmessages_1.14:localhost", Some("@gmessages_1.14:localhost"), false),
+            display_name_for("@gmessages_1.14:localhost", Some("Alex Rivera"), false),
+            "Alex Rivera"
+        );
+        // No display name yet: never the raw MXID.
+        assert_eq!(
+            fallback_name("@gmessages_1.14:localhost"),
             "Unknown contact"
         );
-        assert_eq!(fallback_name("@imessage_tel=2b15551234567:localhost"), "+15551234567");
+        assert_eq!(
+            display_name_for("@gmessages_1.14:localhost", None, false),
+            "Unknown contact"
+        );
+        assert_eq!(
+            display_name_for(
+                "@gmessages_1.14:localhost",
+                Some("@gmessages_1.14:localhost"),
+                false
+            ),
+            "Unknown contact"
+        );
+        assert_eq!(
+            fallback_name("@imessage_tel=2b15551234567:localhost"),
+            "+15551234567"
+        );
         assert_eq!(fallback_name("@alice:example.org"), "alice");
         // Duplicate names: Matrix users get disambiguated, ghosts don't.
-        assert_eq!(display_name_for("@sam:x", Some("Sam"), true), "Sam (@sam:x)");
-        assert_eq!(display_name_for("@gmessages_1.9:x", Some("Sam"), true), "Sam");
+        assert_eq!(
+            display_name_for("@sam:x", Some("Sam"), true),
+            "Sam (@sam:x)"
+        );
+        assert_eq!(
+            display_name_for("@gmessages_1.9:x", Some("Sam"), true),
+            "Sam"
+        );
         // Fresh messages (the live sync path) start from the fallback, not the MXID.
         let ev = &fixture()[2];
         assert_eq!(parse_event(ev, ME).unwrap().sender_name, "Unknown contact");
@@ -543,7 +600,10 @@ mod tests {
     fn marked_unread_stable_and_unstable() {
         assert!(!marked_unread(None, None));
         assert!(marked_unread(None, Some(&json!({"unread": true}))));
-        assert!(!marked_unread(Some(&json!({"unread": false})), Some(&json!({"unread": true}))));
+        assert!(!marked_unread(
+            Some(&json!({"unread": false})),
+            Some(&json!({"unread": true}))
+        ));
         assert!(marked_unread(Some(&json!({"unread": true})), None));
     }
 

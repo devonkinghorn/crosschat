@@ -6,8 +6,7 @@ import 'package:http/http.dart' as http;
 /// the user's Matrix access token; crosschatd validates it against the
 /// homeserver and forwards provisioning calls to the right bridge.
 class DaemonClient {
-  DaemonClient({required this.baseUrl, required this.accessToken, http.Client? httpClient})
-    : _http = httpClient ?? http.Client();
+  DaemonClient({required this.baseUrl, required this.accessToken, http.Client? httpClient}) : _http = httpClient ?? http.Client();
 
   /// Usually the homeserver URL (crosschatd is mounted at `/_crosschat/` on
   /// the same domain), or e.g. `http://127.0.0.1:29300` locally.
@@ -60,25 +59,31 @@ class DaemonClient {
     await _send('POST', '/_crosschat/v1/bridges/$bridge/$action', body: <String, dynamic>{}, timeout: const Duration(seconds: 60));
   }
 
-  /// bridgev2 `resolve_identifier`: is this phone number / email / username
-  /// reachable on the network? Returns null when it isn't.
-  Future<Contact?> resolveIdentifier(String bridge, String identifier) async {
-    try {
-      final v = await provision(bridge, 'GET', 'v3/resolve_identifier/${Uri.encodeComponent(identifier)}', timeout: const Duration(seconds: 20))
-          as Map<String, dynamic>;
-      return Contact.fromJson({
-        ...v,
-        'bridge': bridge,
-        'network': v['network'] ?? bridge,
-        'id': v['id'] ?? identifier,
-        'mxid': v['mxid'],
-        'dm_room_mxid': v['dm_room_mxid'],
-        'identifiers': v['identifiers'] ?? [identifier],
-      });
-    } on DaemonException catch (e) {
-      if (e.status == 404 || e.status == 400 || e.errcode == 'M_NOT_FOUND') return null;
-      rethrow;
-    }
+  /// Is this phone number / email reachable on each running network
+  /// (bridgev2 `resolve_identifier`, in the form each bridge expects)?
+  /// Maps bridge id → the contact, or null when it isn't reachable there.
+  Future<Map<String, Contact?>> resolve(String identifier, {List<String>? bridges}) async {
+    final v = await _send(
+      'POST',
+      '/_crosschat/v1/resolve',
+      body: {'identifier': identifier, 'bridges': ?bridges},
+      timeout: const Duration(seconds: 25),
+    ) as Map<String, dynamic>;
+    return {
+      for (final e in (v['results'] as Map).entries) e.key as String: e.value == null ? null : Contact.fromJson((e.value as Map).cast<String, dynamic>()),
+    };
+  }
+
+  /// Start (or reuse) a DM with a phone number / email (or a bridge user id)
+  /// on one network; returns the portal room id.
+  Future<String?> startDm(String bridge, String identifier, {String? loginId}) async {
+    final v = await _send(
+      'POST',
+      '/_crosschat/v1/dm',
+      body: {'bridge': bridge, 'identifier': identifier, 'login_id': ?loginId},
+      timeout: const Duration(seconds: 30),
+    ) as Map<String, dynamic>;
+    return v['dm_room_mxid'] as String?;
   }
 
   /// Contact search across every bridge (bridgev2 `search_users` +
@@ -189,6 +194,7 @@ class BridgeInfo {
     this.progress,
     this.setupError,
     this.keepAwake = false,
+    this.hostPlatforms = const [],
   });
 
   factory BridgeInfo.fromJson(Map<String, dynamic> j) => BridgeInfo(
@@ -207,6 +213,7 @@ class BridgeInfo {
     progress: j['progress'] as String?,
     setupError: j['setup_error'] as String?,
     keepAwake: j['keep_awake'] as bool? ?? false,
+    hostPlatforms: ((j['host_platforms'] as List?) ?? []).cast<String>(),
   );
 
   final String id;
@@ -230,6 +237,9 @@ class BridgeInfo {
 
   /// Needs its computer awake (the server keeps it from sleeping).
   final bool keepAwake;
+
+  /// Server OSes it runs on (`linux`, `macos`).
+  final List<String> hostPlatforms;
 
   bool get running => processState == 'running';
 
