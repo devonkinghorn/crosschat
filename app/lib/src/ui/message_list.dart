@@ -1,17 +1,30 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../models.dart';
 import '../state/timeline_fold.dart';
 import 'media_view.dart';
+import 'message_actions.dart';
 import 'theme.dart';
 import 'widgets.dart';
 
 /// Dense, Slack-style message list. Consecutive messages from the same
 /// sender within 5 minutes collapse their header.
 class MessageList extends StatefulWidget {
-  const MessageList({super.key, required this.messages, this.onOpenThread, this.canThread = true, this.padding = const EdgeInsets.only(bottom: 12)});
+  const MessageList({
+    super.key,
+    required this.messages,
+    this.onOpenThread,
+    this.canThread = true,
+    this.padding = const EdgeInsets.only(bottom: 12),
+    this.actions,
+  });
 
   final List<Message> messages;
+
+  /// Reactions, save for later, reply in thread (hover toolbar / long press).
+  final MessageActions? actions;
   final void Function(Message root)? onOpenThread;
   final bool canThread;
   final EdgeInsets padding;
@@ -44,6 +57,7 @@ class _MessageListState extends State<MessageList> {
               grouped: grouped,
               canThread: widget.canThread && widget.onOpenThread != null,
               onOpenThread: widget.onOpenThread == null ? null : () => widget.onOpenThread!(m),
+              actions: widget.actions,
             ),
           ],
         );
@@ -75,11 +89,12 @@ class _DayDivider extends StatelessWidget {
 }
 
 class MessageTile extends StatefulWidget {
-  const MessageTile({super.key, required this.message, this.grouped = false, this.canThread = true, this.onOpenThread});
+  const MessageTile({super.key, required this.message, this.grouped = false, this.canThread = true, this.onOpenThread, this.actions});
   final Message message;
   final bool grouped;
   final bool canThread;
   final VoidCallback? onOpenThread;
+  final MessageActions? actions;
 
   @override
   State<MessageTile> createState() => _MessageTileState();
@@ -87,14 +102,69 @@ class MessageTile extends StatefulWidget {
 
 class _MessageTileState extends State<MessageTile> {
   bool _hover = false;
+  bool _toolbarHover = false;
+  final _link = LayerLink();
+  final _toolbar = OverlayPortalController();
+
+  bool get _hasActions => widget.actions != null && MessageActions.actionable(widget.message);
+
+  /// "Reply in thread" applies to messages in the main timeline of chats
+  /// whose network has threads.
+  MessageActions? get _actions {
+    final a = widget.actions;
+    if (a == null) return null;
+    final threadable = widget.canThread && widget.onOpenThread != null && widget.message.threadRoot == null;
+    return MessageActions(
+      toggleReaction: a.toggleReaction,
+      isSaved: a.isSaved,
+      toggleSaved: a.toggleSaved,
+      nameOf: a.nameOf,
+      replyInThread: threadable ? (_) => widget.onOpenThread!() : null,
+    );
+  }
+
+  void _setHover({bool? tile, bool? toolbar}) {
+    if (tile != null) _hover = tile;
+    if (toolbar != null) _toolbarHover = toolbar;
+    // Leaving the tile for the toolbar (an overlay) reports exit then enter
+    // in the same pointer update; decide after both.
+    scheduleMicrotask(() {
+      if (!mounted) return;
+      final show = (_hover || _toolbarHover) && _hasActions;
+      if (show && !_toolbar.isShowing) _toolbar.show();
+      if (!show && _toolbar.isShowing) _toolbar.hide();
+      setState(() {});
+    });
+  }
+
+  Widget _buildToolbar(BuildContext context) {
+    final actions = _actions;
+    if (actions == null) return const SizedBox.shrink();
+    return Align(
+      alignment: Alignment.topLeft,
+      child: CompositedTransformFollower(
+        link: _link,
+        targetAnchor: Alignment.topRight,
+        followerAnchor: Alignment.topRight,
+        offset: const Offset(-14, -14),
+        child: MouseRegion(
+          onEnter: (_) => _setHover(toolbar: true),
+          onExit: (_) => _setHover(toolbar: false),
+          child: MessageHoverToolbar(message: widget.message, actions: actions),
+        ),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
     final m = widget.message;
     final tap = m.tapback;
     if (tap != null) return _TapbackLine(message: m, tapback: tap);
+    final hover = _hover || _toolbarHover;
     final muted = m.kind == 'redacted' || m.kind == 'undecryptable' || m.kind == 'notice';
     final hasText = m.body.isNotEmpty || m.media == null;
+    final actions = _hasActions ? _actions : null;
     final body = Text.rich(
       TextSpan(
         children: [
@@ -110,76 +180,69 @@ class _MessageTileState extends State<MessageTile> {
         ],
       ),
     );
-    return MouseRegion(
-      onEnter: (_) => setState(() => _hover = true),
-      onExit: (_) => setState(() => _hover = false),
-      child: Container(
-        color: _hover ? CC.hover.withValues(alpha: 0.45) : null,
-        padding: EdgeInsets.fromLTRB(16, widget.grouped ? 1 : 8, 16, 1),
-        child: Stack(
-          children: [
-            Row(
+    final tile = Container(
+      key: Key('message-${m.eventId}'),
+      color: hover ? CC.hover.withValues(alpha: 0.45) : null,
+      padding: EdgeInsets.fromLTRB(16, widget.grouped ? 1 : 8, 16, 1),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 40,
+            child: widget.grouped
+                ? (hover
+                      ? Padding(
+                          padding: const EdgeInsets.only(top: 4),
+                          child: Text(formatTime(m.time).replaceAll(' ', '\n'), style: const TextStyle(color: CC.textFaint, fontSize: 9)),
+                        )
+                      : null)
+                : Avatar(name: m.senderName, seed: m.sender, mxc: m.senderAvatar),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                SizedBox(
-                  width: 40,
-                  child: widget.grouped
-                      ? (_hover
-                            ? Padding(
-                                padding: const EdgeInsets.only(top: 4),
-                                child: Text(formatTime(m.time).replaceAll(' ', '\n'), style: const TextStyle(color: CC.textFaint, fontSize: 9)),
-                              )
-                            : null)
-                      : Avatar(name: m.senderName, seed: m.sender, mxc: m.senderAvatar),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+                if (!widget.grouped)
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.baseline,
+                    textBaseline: TextBaseline.alphabetic,
                     children: [
-                      if (!widget.grouped)
-                        Row(
-                          crossAxisAlignment: CrossAxisAlignment.baseline,
-                          textBaseline: TextBaseline.alphabetic,
-                          children: [
-                            Flexible(
-                              child: Text(
-                                m.senderName,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15, color: Colors.white),
-                              ),
-                            ),
-                            const SizedBox(width: 8),
-                            Text(formatTime(m.time), style: const TextStyle(color: CC.textFaint, fontSize: 11.5)),
-                          ],
+                      Flexible(
+                        child: Text(
+                          m.senderName,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15, color: Colors.white),
                         ),
-                      if (hasText) body,
-                      if (m.media != null) MediaView(message: m),
-                      if (m.reactions.isNotEmpty) ReactionRow(message: m),
-                      if (widget.canThread && m.thread != null && m.thread!.replyCount > 0) ThreadSummaryRow(summary: m.thread!, onTap: widget.onOpenThread),
+                      ),
+                      const SizedBox(width: 8),
+                      Text(formatTime(m.time), style: const TextStyle(color: CC.textFaint, fontSize: 11.5)),
                     ],
                   ),
-                ),
+                if (hasText) body,
+                if (m.media != null) MediaView(message: m),
+                if (m.reactions.isNotEmpty) ReactionRow(message: m, actions: actions),
+                if (widget.canThread && m.thread != null && m.thread!.replyCount > 0) ThreadSummaryRow(summary: m.thread!, onTap: widget.onOpenThread),
               ],
             ),
-            if (_hover && widget.canThread)
-              Positioned(
-                right: 0,
-                top: 0,
-                child: Material(
-                  color: CC.sidebar,
-                  elevation: 2,
-                  borderRadius: BorderRadius.circular(6),
-                  child: IconButton(
-                    tooltip: 'Reply in thread',
-                    visualDensity: VisualDensity.compact,
-                    iconSize: 18,
-                    icon: const Icon(Icons.forum_outlined, color: CC.textMuted),
-                    onPressed: widget.onOpenThread,
-                  ),
-                ),
-              ),
-          ],
+          ),
+        ],
+      ),
+    );
+    if (actions == null) return tile;
+    return OverlayPortal(
+      controller: _toolbar,
+      overlayChildBuilder: _buildToolbar,
+      child: CompositedTransformTarget(
+        link: _link,
+        child: MouseRegion(
+          onEnter: (_) => _setHover(tile: true),
+          onExit: (_) => _setHover(tile: false),
+          child: GestureDetector(
+            // Phones: long-press for actions; a tap keeps its current meaning.
+            onLongPress: () => showMessageActionsSheet(context, m, actions),
+            child: tile,
+          ),
         ),
       ),
     );
@@ -218,35 +281,75 @@ class _TapbackLine extends StatelessWidget {
   );
 }
 
-/// Reaction chips under a message ("👍 2").
+/// Reaction chips under a message ("👍 2"), highlighted where the user
+/// reacted. With [actions], a click toggles the user's reaction and a
+/// trailing button opens the emoji picker.
 class ReactionRow extends StatelessWidget {
-  const ReactionRow({super.key, required this.message});
+  const ReactionRow({super.key, required this.message, this.actions});
   final Message message;
+  final MessageActions? actions;
 
   @override
-  Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.only(top: 4),
-    child: Wrap(
-      spacing: 4,
-      runSpacing: 4,
-      children: [
-        for (final r in message.reactions)
-          Tooltip(
-            message: '${r.count} ${r.count == 1 ? 'reaction' : 'reactions'}${r.own ? ' (including you)' : ''}',
-            child: Container(
-              key: Key('reaction-${message.eventId}-${r.key}'),
-              padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-              decoration: BoxDecoration(
+  Widget build(BuildContext context) {
+    final a = actions;
+    return Padding(
+      padding: const EdgeInsets.only(top: 4),
+      child: Wrap(
+        spacing: 4,
+        runSpacing: 4,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: [
+          for (final r in message.reactions)
+            Tooltip(
+              message: a?.reactedLabel(r) ?? '${r.count} ${r.count == 1 ? 'reaction' : 'reactions'}${r.own ? ' (including you)' : ''}',
+              child: Material(
                 color: r.own ? CC.accent.withValues(alpha: 0.22) : CC.input,
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: r.own ? CC.accent : Colors.transparent),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10),
+                  side: BorderSide(color: r.own ? CC.accent : Colors.transparent),
+                ),
+                child: InkWell(
+                  key: Key('reaction-${message.eventId}-${r.key}'),
+                  borderRadius: BorderRadius.circular(10),
+                  onTap: a == null ? null : () => a.react(context, message, r.key),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                    child: Text.rich(
+                      TextSpan(
+                        children: [
+                          TextSpan(text: r.key, style: emojiStyle(14)),
+                          TextSpan(
+                            text: ' ${r.count}',
+                            style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, color: r.own ? const Color(0xFFC9CDFB) : CC.textMuted),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
               ),
-              child: Text('${r.key} ${r.count}', style: const TextStyle(fontSize: 12.5)),
             ),
-          ),
-      ],
-    ),
-  );
+          if (a != null)
+            Tooltip(
+              message: 'Add reaction',
+              child: Material(
+                color: CC.input,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                child: InkWell(
+                  key: Key('reaction-add-${message.eventId}'),
+                  borderRadius: BorderRadius.circular(10),
+                  onTap: () => a.pickAndReact(context, message),
+                  child: const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                    child: Icon(Icons.add_reaction_outlined, size: 16, color: CC.textMuted),
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
 }
 
 /// "▣▣ 3 replies   Last reply 2h ago" under a thread root.
@@ -281,9 +384,13 @@ class ThreadSummaryRow extends StatelessWidget {
               ),
               if (summary.latestReplyTs != null) ...[
                 const SizedBox(width: 8),
-                Text(
-                  'Last reply ${formatRelative(DateTime.fromMillisecondsSinceEpoch(summary.latestReplyTs!))}',
-                  style: const TextStyle(color: CC.textFaint, fontSize: 12),
+                Flexible(
+                  child: Text(
+                    'Last reply ${formatRelative(DateTime.fromMillisecondsSinceEpoch(summary.latestReplyTs!))}',
+                    overflow: TextOverflow.ellipsis,
+                    maxLines: 1,
+                    style: const TextStyle(color: CC.textFaint, fontSize: 12),
+                  ),
                 ),
               ],
             ],

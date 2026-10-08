@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../state/app_state.dart';
 import 'composer.dart';
+import 'message_actions.dart';
 import 'message_list.dart';
 import 'theme.dart';
 
@@ -25,18 +26,32 @@ class ThreadPanel extends StatelessWidget {
           Container(
             height: 52,
             padding: const EdgeInsets.only(left: 16, right: 4),
-            decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: Color(0xFF26282C)))),
+            decoration: const BoxDecoration(
+              border: Border(bottom: BorderSide(color: Color(0xFF26282C))),
+            ),
             child: Row(
               children: [
                 const Icon(Icons.forum_rounded, color: CC.textMuted, size: 20),
                 const SizedBox(width: 8),
-                const Text('Thread', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16, color: Colors.white)),
+                const Text(
+                  'Thread',
+                  style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16, color: Colors.white),
+                ),
                 const SizedBox(width: 8),
                 Flexible(
-                  child: Text('#${room.name}', overflow: TextOverflow.ellipsis, style: const TextStyle(color: CC.textMuted, fontSize: 13)),
+                  child: Text(
+                    '#${room.name}',
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(color: CC.textMuted, fontSize: 13),
+                  ),
                 ),
                 const Spacer(),
-                IconButton(key: const Key('close-thread'), tooltip: 'Close thread', icon: const Icon(Icons.close, color: CC.textMuted), onPressed: onClose),
+                IconButton(
+                  key: const Key('close-thread'),
+                  tooltip: 'Close thread',
+                  icon: const Icon(Icons.close, color: CC.textMuted),
+                  onPressed: onClose,
+                ),
               ],
             ),
           ),
@@ -45,6 +60,7 @@ class ThreadPanel extends StatelessWidget {
               // Root first, then a divider-like gap via the list itself.
               messages: msgs,
               canThread: false,
+              actions: MessageActions.of(state),
             ),
           ),
           Padding(

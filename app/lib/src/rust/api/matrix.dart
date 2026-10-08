@@ -67,6 +67,30 @@ Future<String> sendText({
   threadRoot: threadRoot,
 );
 
+/// Add or remove the user's reaction `key` on `event_id`: adding sends an
+/// `m.reaction` annotation, removing redacts the user's own reaction(s).
+/// Returns whether anything changed.
+Future<bool> setReaction({
+  required String roomId,
+  required String eventId,
+  required String key,
+  required bool add,
+}) => RustLib.instance.api.crateApiMatrixSetReaction(
+  roomId: roomId,
+  eventId: eventId,
+  key: key,
+  add: add,
+);
+
+/// One message by id (for the Saved list); `None` if it isn't a message.
+Future<ChatMessage?> getMessage({
+  required String roomId,
+  required String eventId,
+}) => RustLib.instance.api.crateApiMatrixGetMessage(
+  roomId: roomId,
+  eventId: eventId,
+);
+
 /// Mark a room read up to `event_id` (default: its latest message): read
 /// receipt + fully-read marker, clears marked-unread. Returns the event id.
 Future<String?> markRead({required String roomId, String? eventId}) => RustLib

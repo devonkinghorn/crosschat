@@ -46,9 +46,9 @@ List<ReactionGroup> _addReaction(List<ReactionGroup> groups, String key, String 
   final out = [...groups];
   final i = out.indexWhere((g) => g.key.replaceAll('\uFE0F', '') == k);
   if (i < 0) {
-    out.add(ReactionGroup(key: key, senders: [sender], own: own));
+    out.add(ReactionGroup(key: key, senders: [sender], own: own, ownFromText: own));
   } else if (!out[i].senders.contains(sender)) {
-    out[i] = ReactionGroup(key: out[i].key, senders: [...out[i].senders, sender], own: out[i].own || own);
+    out[i] = ReactionGroup(key: out[i].key, senders: [...out[i].senders, sender], own: out[i].own || own, ownFromText: out[i].ownFromText || own);
   }
   return out;
 }
@@ -60,7 +60,12 @@ List<ReactionGroup> _removeReaction(List<ReactionGroup> groups, String key, Stri
       if (g.key.replaceAll('\uFE0F', '') != k)
         g
       else if (g.senders.any((s) => s != sender))
-        ReactionGroup(key: g.key, senders: g.senders.where((s) => s != sender).toList(), own: g.own && g.senders.length > 1),
+        ReactionGroup(
+          key: g.key,
+          senders: g.senders.where((s) => s != sender).toList(),
+          own: g.own && g.senders.length > 1,
+          ownFromText: g.ownFromText && g.senders.length > 1,
+        ),
   ];
 }
 

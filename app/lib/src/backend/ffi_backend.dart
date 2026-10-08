@@ -22,7 +22,7 @@ class FfiBackend implements ChatBackend {
 
   Session _session(rs.SessionInfo s) => Session(userId: s.userId, deviceId: s.deviceId, homeserver: s.homeserver, accessToken: s.accessToken);
 
-  static Message message(rs.ChatMessage m) => Message(
+  static Message toMessage(rs.ChatMessage m) => Message(
     eventId: m.eventId,
     sender: m.sender,
     senderName: m.senderName,
@@ -92,7 +92,7 @@ class FfiBackend implements ChatBackend {
   Stream<BackendUpdate> updates() => rs.subscribeUpdates().map((u) {
     switch (u.kind) {
       case 'new_message':
-        return BackendUpdate.newMessage(u.roomId!, message(u.message!));
+        return BackendUpdate.newMessage(u.roomId!, toMessage(u.message!));
       case 'sync_state':
         return BackendUpdate.syncState(u.state ?? '');
       case 'timeline_changed':
@@ -129,14 +129,24 @@ class FfiBackend implements ChatBackend {
       .toList();
 
   @override
-  Future<List<Message>> timeline(String roomId, {int limit = 60}) async => (await rs.roomTimeline(roomId: roomId, limit: limit)).map(message).toList();
+  Future<List<Message>> timeline(String roomId, {int limit = 60}) async => (await rs.roomTimeline(roomId: roomId, limit: limit)).map(toMessage).toList();
 
   @override
   Future<List<Message>> thread(String roomId, String rootId, {int limit = 100}) async =>
-      (await rs.threadTimeline(roomId: roomId, rootId: rootId, limit: limit)).map(message).toList();
+      (await rs.threadTimeline(roomId: roomId, rootId: rootId, limit: limit)).map(toMessage).toList();
 
   @override
   Future<String> sendText(String roomId, String body, {String? threadRoot}) => rs.sendText(roomId: roomId, body: body, threadRoot: threadRoot);
+
+  @override
+  Future<bool> setReaction(String roomId, String eventId, String key, {required bool add}) =>
+      rs.setReaction(roomId: roomId, eventId: eventId, key: key, add: add);
+
+  @override
+  Future<Message?> message(String roomId, String eventId) async {
+    final m = await rs.getMessage(roomId: roomId, eventId: eventId);
+    return m == null ? null : toMessage(m);
+  }
 
   @override
   Future<void> markRead(String roomId, {String? eventId}) => rs.markRead(roomId: roomId, eventId: eventId);

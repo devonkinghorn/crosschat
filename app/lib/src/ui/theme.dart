@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 /// Dark, dense Slack/Discord-inspired palette.
@@ -45,3 +46,15 @@ ThemeData buildTheme() {
     ),
   );
 }
+
+/// Text style that renders emoji in the platform's color emoji font (the
+/// default text font may carry monochrome glyphs for some of them).
+TextStyle emojiStyle(double size) =>
+    TextStyle(fontSize: size, fontFamily: _emojiFont, fontFamilyFallback: const ['Apple Color Emoji', 'Noto Color Emoji', 'Segoe UI Emoji']);
+
+final String? _emojiFont = switch (defaultTargetPlatform) {
+  TargetPlatform.macOS || TargetPlatform.iOS => 'Apple Color Emoji',
+  TargetPlatform.windows => 'Segoe UI Emoji',
+  TargetPlatform.linux || TargetPlatform.android => 'Noto Color Emoji',
+  _ => null,
+};

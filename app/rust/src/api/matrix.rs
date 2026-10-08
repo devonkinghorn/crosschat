@@ -375,6 +375,25 @@ pub async fn send_text(
     on_rt(async move { c.send_text(&room_id, &body, thread_root.as_deref()).await }).await
 }
 
+/// Add or remove the user's reaction `key` on `event_id`: adding sends an
+/// `m.reaction` annotation, removing redacts the user's own reaction(s).
+/// Returns whether anything changed.
+pub async fn set_reaction(
+    room_id: String,
+    event_id: String,
+    key: String,
+    add: bool,
+) -> Result<bool> {
+    let c = client()?;
+    on_rt(async move { c.set_reaction(&room_id, &event_id, &key, add).await }).await
+}
+
+/// One message by id (for the Saved list); `None` if it isn't a message.
+pub async fn get_message(room_id: String, event_id: String) -> Result<Option<ChatMessage>> {
+    let c = client()?;
+    on_rt(async move { Ok(c.message(&room_id, &event_id).await?.map(msg)) }).await
+}
+
 /// Mark a room read up to `event_id` (default: its latest message): read
 /// receipt + fully-read marker, clears marked-unread. Returns the event id.
 pub async fn mark_read(room_id: String, event_id: Option<String>) -> Result<Option<String>> {

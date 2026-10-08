@@ -48,7 +48,18 @@ class DemoBackend implements ChatBackend {
         unread: 3,
       ),
       [
-        _m(r'$s1', '@slack_u1:crosschat.app', 'Priya Natarajan', 'Deploy of api-gateway v2.14 is rolling out to canary now 🚀', const Duration(hours: 3)),
+        _m(
+          r'$s1',
+          '@slack_u1:crosschat.app',
+          'Priya Natarajan',
+          'Deploy of api-gateway v2.14 is rolling out to canary now 🚀',
+          const Duration(hours: 3),
+        ).copyWith(
+          reactions: const [
+            ReactionGroup(key: '🚀', senders: ['@slack_u2:crosschat.app', '@slack_u3:crosschat.app']),
+            ReactionGroup(key: '👀', senders: [me], own: true),
+          ],
+        ),
         _m(
           r'$s2',
           '@slack_u2:crosschat.app',
@@ -176,6 +187,48 @@ class DemoBackend implements ChatBackend {
     _updates.add(BackendUpdate.newMessage(roomId, m));
     _updates.add(const BackendUpdate.roomsChanged());
     return id;
+  }
+
+  /// Reaction calls made, for tests: `(roomId, eventId, key, add)`.
+  final List<(String, String, String, bool)> reactionCalls = [];
+
+  @override
+  Future<bool> setReaction(String roomId, String eventId, String key, {required bool add}) async {
+    reactionCalls.add((roomId, eventId, key, add));
+    final list = _events[roomId];
+    final i = list?.indexWhere((m) => m.eventId == eventId) ?? -1;
+    if (list == null || i < 0) throw StateError('no such message');
+    final m = list[i];
+    final norm = key.replaceAll('\uFE0F', '');
+    final groups = [...m.reactions];
+    final g = groups.indexWhere((r) => r.key.replaceAll('\uFE0F', '') == norm);
+    if (add) {
+      if (g >= 0 && groups[g].own) return false;
+      if (g < 0) {
+        groups.add(ReactionGroup(key: key, senders: [me], own: true));
+      } else {
+        groups[g] = ReactionGroup(key: groups[g].key, senders: [...groups[g].senders, me], own: true);
+      }
+    } else {
+      if (g < 0 || !groups[g].own) return false;
+      final rest = groups[g].senders.where((s) => s != me).toList();
+      if (rest.isEmpty) {
+        groups.removeAt(g);
+      } else {
+        groups[g] = ReactionGroup(key: groups[g].key, senders: rest);
+      }
+    }
+    list[i] = m.copyWith(reactions: groups);
+    _updates.add(BackendUpdate.timelineChanged(roomId));
+    return true;
+  }
+
+  @override
+  Future<Message?> message(String roomId, String eventId) async {
+    for (final m in _events[roomId] ?? const <Message>[]) {
+      if (m.eventId == eventId) return m;
+    }
+    return null;
   }
 
   /// Calls made, for tests: `(roomId, eventId)`.

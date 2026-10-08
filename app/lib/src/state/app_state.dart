@@ -12,6 +12,7 @@ import '../models.dart';
 import '../platform.dart';
 import '../ui/media_cache.dart';
 import 'network_groups.dart';
+import 'saved.dart';
 import 'timeline_fold.dart';
 import 'settings.dart';
 
@@ -379,6 +380,7 @@ class AppState extends ChangeNotifier {
       await PersistentSyncService.setEnabled(true);
     }
     unawaited(connectDaemon());
+    unawaited(loadSaved());
   }
 
   /// Connect to crosschatd (bridge management, contact search). Optional:
@@ -641,6 +643,7 @@ class AppState extends ChangeNotifier {
         _scheduleRoomRefresh();
       case 'timeline_changed':
         if (u.roomId == selectedRoomId) _scheduleTimelineReload();
+        if (showingSaved && saved.items.any((i) => i.roomId == u.roomId)) _scheduleSavedReload();
       case 'sync_state':
         syncState = u.state ?? '';
       default:
@@ -741,6 +744,8 @@ class AppState extends ChangeNotifier {
   Future<void> reloadTimeline() async {
     final roomId = selectedRoomId;
     if (roomId == null) return;
+    final root = openThreadRoot;
+    if (root != null) unawaited(_reloadThread(roomId, root));
     try {
       final fresh = foldTapbacks(await backend.timeline(roomId));
       if (selectedRoomId != roomId) return;
@@ -750,6 +755,166 @@ class AppState extends ChangeNotifier {
       messages = foldTapbacks([...fresh, ...messages.where((m) => m.ts > lastTs && !ids.contains(m.eventId))]);
       notifyListeners();
     } catch (_) {}
+  }
+
+  Future<void> _reloadThread(String roomId, String root) async {
+    try {
+      final fresh = await backend.thread(roomId, root);
+      if (selectedRoomId != roomId || openThreadRoot != root) return;
+      threadMessages = fresh;
+      notifyListeners();
+    } catch (_) {}
+  }
+
+  // ---- Reactions -------------------------------------------------------------
+
+  /// Toggle the user's reaction [key] on [m] (in the open chat, or
+  /// [roomId]): click on a chip, quick reaction or picker choice. Returns a
+  /// message for the user when it didn't (fully) work.
+  Future<String?> toggleReaction(Message m, String key, {String? roomId}) {
+    final g = m.reactions.where((r) => r.matches(key)).firstOrNull;
+    return react(m, key, add: !(g?.own ?? false), roomId: roomId);
+  }
+
+  /// Add or remove the user's reaction: a real `m.reaction` / redaction,
+  /// applied locally right away and reconciled by the next timeline reload.
+  Future<String?> react(Message m, String key, {required bool add, String? roomId}) async {
+    final room = roomId ?? selectedRoomId;
+    final me = session?.userId;
+    if (room == null || me == null) return null;
+    final group = m.reactions.where((r) => r.matches(key)).firstOrNull;
+    _applyLocalReaction(m.eventId, key, me, add: add);
+    notifyListeners();
+    String? problem;
+    try {
+      final changed = await backend.setReaction(room, m.eventId, key, add: add);
+      if (!add && !changed && group != null && group.ownFromText) {
+        problem = 'That reaction was sent from your phone as a text message, so it can only be removed there.';
+      }
+    } catch (e) {
+      problem = 'Reaction failed: $e';
+    }
+    if (room == selectedRoomId) _scheduleTimelineReload();
+    if (showingSaved) _scheduleSavedReload();
+    return problem;
+  }
+
+  void _applyLocalReaction(String eventId, String key, String me, {required bool add}) {
+    List<Message> apply(List<Message> list) => [
+      for (final x in list)
+        if (x.eventId == eventId) x.copyWith(reactions: applyOwnReaction(x.reactions, key, me, add: add)) else x,
+    ];
+    messages = apply(messages);
+    threadMessages = apply(threadMessages);
+    savedMessages = {
+      for (final e in savedMessages.entries)
+        e.key: e.value == null || e.value!.eventId != eventId ? e.value : e.value!.copyWith(reactions: applyOwnReaction(e.value!.reactions, key, me, add: add)),
+    };
+  }
+
+  // ---- Saved for later -------------------------------------------------------
+
+  SavedMessages saved = SavedMessages();
+  bool _savedLoaded = false;
+
+  /// The Saved view is open instead of a chat.
+  bool showingSaved = false;
+
+  /// `roomId|eventId` -> the saved message (null: gone / not loadable).
+  Map<String, Message?> savedMessages = {};
+  bool loadingSaved = false;
+  Timer? _savedDebounce;
+
+  static String _savedKey(String roomId, String eventId) => '$roomId|$eventId';
+
+  bool isSaved(String roomId, String eventId) => saved.contains(roomId, eventId);
+
+  Future<void> loadSaved({bool force = false}) async {
+    if ((_savedLoaded && !force) || session == null) return;
+    try {
+      saved = SavedMessages.fromJson(await backend.accountData(SavedMessages.eventType));
+      _savedLoaded = true;
+      notifyListeners();
+    } catch (e) {
+      debugPrint('saved messages: $e');
+    }
+  }
+
+  /// Save [m] (in [roomId], default the open chat) for later, or unsave it.
+  /// Returns a message for the user when saving failed.
+  Future<String?> toggleSaved(Message m, {String? roomId}) async {
+    final room = roomId ?? selectedRoomId;
+    if (room == null) return null;
+    await loadSaved();
+    final items = [...saved.items];
+    final i = items.indexWhere((x) => x.roomId == room && x.eventId == m.eventId);
+    if (i >= 0) {
+      items.removeAt(i);
+    } else {
+      items.insert(0, SavedItem(roomId: room, eventId: m.eventId, savedAt: clock().millisecondsSinceEpoch));
+      savedMessages = {...savedMessages, _savedKey(room, m.eventId): m};
+    }
+    final before = saved;
+    saved = SavedMessages(items);
+    notifyListeners();
+    try {
+      await backend.setAccountData(SavedMessages.eventType, saved.toJson());
+      return null;
+    } catch (e) {
+      saved = before;
+      notifyListeners();
+      return 'Saving failed: $e';
+    }
+  }
+
+  /// Show the Saved list (sidebar entry).
+  Future<void> openSaved() async {
+    showingSaved = true;
+    openThreadRoot = null;
+    threadMessages = [];
+    notifyListeners();
+    await loadSaved(force: true);
+    await _loadSavedMessages();
+  }
+
+  void closeSaved() {
+    showingSaved = false;
+    notifyListeners();
+  }
+
+  Message? savedMessage(SavedItem i) => savedMessages[_savedKey(i.roomId, i.eventId)];
+  bool savedMessageLoaded(SavedItem i) => savedMessages.containsKey(_savedKey(i.roomId, i.eventId));
+
+  void _scheduleSavedReload() {
+    _savedDebounce?.cancel();
+    _savedDebounce = Timer(const Duration(milliseconds: 400), _loadSavedMessages);
+  }
+
+  Future<void> _loadSavedMessages() async {
+    loadingSaved = true;
+    notifyListeners();
+    final out = <String, Message?>{};
+    await Future.wait([
+      for (final i in saved.items)
+        () async {
+          try {
+            out[_savedKey(i.roomId, i.eventId)] = await backend.message(i.roomId, i.eventId);
+          } catch (_) {
+            out[_savedKey(i.roomId, i.eventId)] = null;
+          }
+        }(),
+    ]);
+    savedMessages = out;
+    loadingSaved = false;
+    notifyListeners();
+  }
+
+  /// Jump from the Saved list to a message: open its chat (and thread).
+  Future<void> openSavedItem(SavedItem i) async {
+    final m = savedMessage(i);
+    await selectRoom(i.roomId);
+    final root = m?.threadRoot;
+    if (root != null) await openThread(root);
   }
 
   void _scheduleRoomRefresh() {
@@ -780,6 +945,7 @@ class AppState extends ChangeNotifier {
   /// automatic selection at startup doesn't.
   Future<void> selectRoom(String roomId, {bool userInitiated = true}) async {
     selectedRoomId = roomId;
+    if (userInitiated) showingSaved = false;
     openThreadRoot = null;
     threadMessages = [];
     loadingMessages = true;
@@ -908,6 +1074,10 @@ class AppState extends ChangeNotifier {
     networkPrefs = ContactNetworkPrefs();
     _prefsLoaded = false;
     _imessageReach.clear();
+    saved = SavedMessages();
+    _savedLoaded = false;
+    savedMessages = {};
+    showingSaved = false;
     notifyListeners();
   }
 
@@ -916,6 +1086,7 @@ class AppState extends ChangeNotifier {
     _sub?.cancel();
     _refreshDebounce?.cancel();
     _timelineDebounce?.cancel();
+    _savedDebounce?.cancel();
     _markReadDebounce?.cancel();
     _accountsTimer?.cancel();
     super.dispose();

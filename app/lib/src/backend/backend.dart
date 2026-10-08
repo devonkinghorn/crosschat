@@ -20,6 +20,14 @@ abstract class ChatBackend {
   Future<List<Message>> thread(String roomId, String rootId, {int limit = 100});
   Future<String> sendText(String roomId, String body, {String? threadRoot});
 
+  /// Add or remove the user's reaction [key] on [eventId]: a real
+  /// `m.reaction` annotation (bridges relay it), removed by redaction.
+  /// Returns whether anything changed.
+  Future<bool> setReaction(String roomId, String eventId, String key, {required bool add});
+
+  /// One message by id (Saved list); null when it's gone or not a message.
+  Future<Message?> message(String roomId, String eventId);
+
   /// Read receipt + fully-read marker on [eventId] (default: the latest
   /// message), so the server and the bridged network mark the chat read.
   Future<void> markRead(String roomId, {String? eventId});

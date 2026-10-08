@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../daemon/daemon_client.dart';
@@ -8,6 +10,7 @@ import 'add_network_dialog.dart';
 import 'bridge_login_dialog.dart';
 import 'channel_view.dart';
 import 'networks.dart';
+import 'saved_view.dart';
 import 'new_chat_dialog.dart';
 import 'settings_screen.dart';
 import 'theme.dart';
@@ -31,6 +34,34 @@ class HomeShell extends StatelessWidget {
     builder: (_) => NewChatDialog(state: state),
   );
 
+  /// Phones: Saved is its own screen; opening an item pushes its chat.
+  Future<void> _openSavedNarrow(BuildContext context) async {
+    unawaited(state.openSaved());
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (context) => ListenableBuilder(
+          listenable: state,
+          builder: (context, _) => Scaffold(
+            backgroundColor: CC.channel,
+            body: SafeArea(
+              child: SavedView(
+                state: state,
+                leading: const BackButton(color: CC.textMuted),
+                onOpen: (item) async {
+                  await state.selectRoom(item.roomId);
+                  if (context.mounted) {
+                    await Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => _NarrowChannel(state: state)));
+                  }
+                },
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    state.closeSaved();
+  }
+
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(
@@ -53,6 +84,7 @@ class HomeShell extends StatelessWidget {
                     child: ChatSidebar(
                       state: state,
                       onNewChat: () => _newChat(context),
+                      onOpenSaved: () => _openSavedNarrow(context),
                       onSelect: (room) async {
                         await state.selectRoom(room.roomId);
                         if (context.mounted) {
@@ -75,10 +107,12 @@ class HomeShell extends StatelessWidget {
               rail,
               SizedBox(
                 width: _sidebarWidth,
-                child: ChatSidebar(state: state, onNewChat: () => _newChat(context), onSelect: (r) => state.selectRoom(r.roomId)),
+                child: ChatSidebar(state: state, onNewChat: () => _newChat(context), onOpenSaved: state.openSaved, onSelect: (r) => state.selectRoom(r.roomId)),
               ),
               Expanded(
-                child: showThread && !threadInline
+                child: state.showingSaved
+                    ? SavedView(state: state, onOpen: state.openSavedItem)
+                    : showThread && !threadInline
                     ? ThreadPanel(state: state, onClose: state.closeThread)
                     : ChannelView(state: state, onOpenThread: (m) => state.openThread(m.eventId)),
               ),
@@ -308,10 +342,13 @@ class _RailItemState extends State<_RailItem> {
 }
 
 class ChatSidebar extends StatelessWidget {
-  const ChatSidebar({super.key, required this.state, required this.onSelect, required this.onNewChat});
+  const ChatSidebar({super.key, required this.state, required this.onSelect, required this.onNewChat, this.onOpenSaved});
   final AppState state;
   final void Function(Room room) onSelect;
   final VoidCallback onNewChat;
+
+  /// The "Saved" entry (saved-for-later messages).
+  final VoidCallback? onOpenSaved;
 
   @override
   Widget build(BuildContext context) {
@@ -372,6 +409,7 @@ class ChatSidebar extends StatelessWidget {
               child: const Text('Sync error, retrying…', style: TextStyle(fontSize: 12)),
             ),
           for (final g in statusGroups) _NetworkStatusBanner(state: state, group: g, showName: current == null),
+          if (onOpenSaved != null) _SavedEntry(count: state.saved.items.length, selected: state.showingSaved, onTap: onOpenSaved!),
           Expanded(
             child: rooms.isEmpty
                 ? Center(
@@ -393,7 +431,7 @@ class ChatSidebar extends StatelessWidget {
                       for (final r in groups)
                         _RoomTile(
                           room: r,
-                          selected: r.roomId == state.selectedRoomId,
+                          selected: !state.showingSaved && r.roomId == state.selectedRoomId,
                           showNetwork: state.networkFilter == null,
                           onTap: () => onSelect(r),
                           onMarkRead: () => state.markRead(r.roomId),
@@ -403,7 +441,7 @@ class ChatSidebar extends StatelessWidget {
                       for (final r in dms)
                         _RoomTile(
                           room: r,
-                          selected: r.roomId == state.selectedRoomId,
+                          selected: !state.showingSaved && r.roomId == state.selectedRoomId,
                           showNetwork: state.networkFilter == null,
                           onTap: () => onSelect(r),
                           onMarkRead: () => state.markRead(r.roomId),
@@ -482,6 +520,50 @@ class _NetworkStatusBanner extends StatelessWidget {
   void _relogin(BuildContext context, BridgeInfo bridge) => showDialog<void>(
     context: context,
     builder: (_) => BridgeLoginDialog(state: state, bridge: bridge),
+  );
+}
+
+/// Sidebar entry for saved-for-later messages.
+class _SavedEntry extends StatelessWidget {
+  const _SavedEntry({required this.count, required this.selected, required this.onTap});
+  final int count;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.fromLTRB(8, 8, 8, 0),
+    child: Material(
+      color: selected ? CC.selected : Colors.transparent,
+      borderRadius: BorderRadius.circular(4),
+      child: InkWell(
+        key: const Key('saved-entry'),
+        borderRadius: BorderRadius.circular(4),
+        hoverColor: CC.hover,
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+          child: Row(
+            children: [
+              Icon(selected ? Icons.bookmark_rounded : Icons.bookmark_border_rounded, size: 18, color: selected ? Colors.white : CC.textMuted),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Saved',
+                  style: TextStyle(color: selected ? Colors.white : CC.textMuted, fontSize: 15, fontWeight: FontWeight.w500),
+                ),
+              ),
+              if (count > 0)
+                Text(
+                  '$count',
+                  key: const Key('saved-count'),
+                  style: const TextStyle(color: CC.textFaint, fontSize: 12),
+                ),
+            ],
+          ),
+        ),
+      ),
+    ),
   );
 }
 

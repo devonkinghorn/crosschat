@@ -53,11 +53,41 @@ class MediaAttachment {
 
 /// Reactions with one key on a message.
 class ReactionGroup {
-  const ReactionGroup({required this.key, required this.senders, this.own = false});
+  const ReactionGroup({required this.key, required this.senders, this.own = false, this.ownFromText = false});
   final String key;
   final List<String> senders;
   final bool own;
+
+  /// The user's reaction came in as an SMS/RCS tapback text (sent from
+  /// their phone), which can't be removed from here.
+  final bool ownFromText;
   int get count => senders.length;
+
+  /// Same emoji, ignoring variation selectors ("❤" == "❤️").
+  bool matches(String other) => normalizeReactionKey(key) == normalizeReactionKey(other);
+}
+
+String normalizeReactionKey(String key) => key.replaceAll('\uFE0F', '').trim();
+
+/// [groups] with the user's reaction [key] added or removed (local echo).
+List<ReactionGroup> applyOwnReaction(List<ReactionGroup> groups, String key, String me, {required bool add}) {
+  final out = [...groups];
+  final i = out.indexWhere((g) => g.matches(key));
+  if (add) {
+    if (i < 0) {
+      out.add(ReactionGroup(key: key, senders: [me], own: true));
+    } else if (!out[i].own) {
+      out[i] = ReactionGroup(key: out[i].key, senders: [...out[i].senders.where((s) => s != me), me], own: true, ownFromText: out[i].ownFromText);
+    }
+  } else if (i >= 0 && out[i].own && !out[i].ownFromText) {
+    final rest = out[i].senders.where((s) => s != me).toList();
+    if (rest.isEmpty) {
+      out.removeAt(i);
+    } else {
+      out[i] = ReactionGroup(key: out[i].key, senders: rest);
+    }
+  }
+  return out;
 }
 
 /// SMS/RCS tapback fallback ("Loved “hi”", "Laughed at an image").

@@ -4,6 +4,7 @@ import '../contacts/people.dart';
 import '../models.dart';
 import '../state/app_state.dart';
 import 'composer.dart';
+import 'message_actions.dart';
 import 'message_list.dart';
 import 'networks.dart';
 import 'theme.dart';
@@ -78,7 +79,7 @@ class ChannelView extends StatelessWidget {
         Expanded(
           child: state.loadingMessages
               ? const Center(child: CircularProgressIndicator())
-              : MessageList(messages: state.messages, canThread: canThread, onOpenThread: canThread ? onOpenThread : null),
+              : MessageList(messages: state.messages, canThread: canThread, onOpenThread: canThread ? onOpenThread : null, actions: MessageActions.of(state)),
         ),
         Composer(
           key: ValueKey('composer-${room.roomId}'),

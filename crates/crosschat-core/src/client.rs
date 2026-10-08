@@ -120,6 +120,22 @@ fn raw_json<T>(raw: &matrix_sdk::ruma::serde::Raw<T>) -> Option<Value> {
     serde_json::from_str(raw.json().get()).ok()
 }
 
+/// An `m.annotation` by `own` with (normalized) key `want`. Works for
+/// encrypted reactions too: `m.relates_to` stays in the cleartext content.
+fn own_reaction_matches(ev: &Value, own: &str, want: &str) -> bool {
+    if ev.get("sender").and_then(Value::as_str) != Some(own) {
+        return false;
+    }
+    let Some(rel) = ev.get("content").and_then(|c| c.get("m.relates_to")) else {
+        return false;
+    };
+    rel.get("rel_type").and_then(Value::as_str) == Some("m.annotation")
+        && rel
+            .get("key")
+            .and_then(Value::as_str)
+            .is_some_and(|k| content::normalize_key(k) == want)
+}
+
 impl CrosschatClient {
     fn wrap(client: Client, data_dir: PathBuf) -> Self {
         let (events, _) = broadcast::channel(512);
@@ -546,6 +562,25 @@ impl CrosschatClient {
         }
         msgs.extend(replies.into_iter().filter(|m| m.event_id != root_id));
         msgs.sort_by_key(|m| m.ts);
+        // Reactions on thread messages live in the main timeline, not in
+        // the thread's relations; pick them up from the recent room history.
+        let mut opts = MessagesOptions::backward();
+        opts.limit = UInt::from(limit.max(100) * 2);
+        if let Ok(resp) = room.messages(opts).await {
+            let mut recent: Vec<Value> = resp
+                .chunk
+                .iter()
+                .filter_map(|e| raw_json(e.raw()))
+                .collect();
+            recent.reverse();
+            recent.extend(raw.iter().cloned());
+            let reactions = content::collect_reactions(&recent, &own);
+            for m in &mut msgs {
+                if let Some(r) = reactions.get(&m.event_id) {
+                    m.reactions = r.clone();
+                }
+            }
+        }
         self.fill_sender_names(&room, &mut msgs).await;
         Ok(msgs)
     }
@@ -574,6 +609,130 @@ impl CrosschatClient {
         }
         let resp = room.send(content).await?;
         Ok(resp.response.event_id.to_string())
+    }
+
+    /// Add (`add = true`) or remove the user's reaction `key` on `target`.
+    /// Adding sends a real `m.reaction` annotation (bridges relay it as a
+    /// tapback / emoji reaction); removing redacts the user's own reaction
+    /// events with that key. Idempotent: adding an existing reaction or
+    /// removing a missing one is a no-op. Returns whether anything changed.
+    pub async fn set_reaction(
+        &self,
+        room_id: &str,
+        target: &str,
+        key: &str,
+        add: bool,
+    ) -> Result<bool> {
+        let room = self.room(room_id)?;
+        let target_eid: OwnedEventId = <&EventId>::try_from(target)?.to_owned();
+        let key = key.trim();
+        if key.is_empty() {
+            return Err(anyhow!("empty reaction"));
+        }
+        let mine = self.own_reactions(&room, &target_eid, key).await?;
+        let changed = if add {
+            if mine.is_empty() {
+                let content = serde_json::json!({
+                    "m.relates_to": {
+                        "rel_type": "m.annotation",
+                        "event_id": target,
+                        "key": key,
+                    }
+                });
+                room.send_raw("m.reaction", content).await?;
+                true
+            } else {
+                false
+            }
+        } else {
+            for id in &mine {
+                room.redact(id, None, None).await?;
+            }
+            !mine.is_empty()
+        };
+        if changed {
+            let _ = self.events.send(CoreEvent::TimelineChanged {
+                room_id: room_id.to_owned(),
+            });
+        }
+        Ok(changed)
+    }
+
+    /// The user's own (unredacted) `m.reaction` events with `key` on `target`.
+    async fn own_reactions(
+        &self,
+        room: &Room,
+        target: &OwnedEventId,
+        key: &str,
+    ) -> Result<Vec<OwnedEventId>> {
+        let own = self.user_id();
+        let want = content::normalize_key(key);
+        let mut out = Vec::new();
+        let mut from: Option<String> = None;
+        // A message rarely has more than a page of reactions; cap the walk.
+        for _ in 0..5 {
+            let opts = RelationsOptions {
+                from: from.clone(),
+                dir: Direction::Backward,
+                limit: Some(UInt::from(100u32)),
+                include_relations: IncludeRelations::RelationsOfType(RelationType::Annotation),
+                ..Default::default()
+            };
+            let rel = room.relations(target.clone(), opts).await?;
+            for ev in &rel.chunk {
+                let Some(v) = raw_json(ev.raw()) else {
+                    continue;
+                };
+                if own_reaction_matches(&v, &own, &want)
+                    && let Some(id) = v.get("event_id").and_then(Value::as_str)
+                    && let Ok(eid) = OwnedEventId::try_from(id)
+                {
+                    out.push(eid);
+                }
+            }
+            match rel.next_batch_token {
+                Some(t) if !rel.chunk.is_empty() => from = Some(t),
+                _ => break,
+            }
+        }
+        Ok(out)
+    }
+
+    /// One message by id (with its reactions as far as the server reports
+    /// them), for the Saved list.
+    pub async fn message(&self, room_id: &str, event_id: &str) -> Result<Option<Message>> {
+        let room = self.room(room_id)?;
+        let eid: OwnedEventId = <&EventId>::try_from(event_id)?.to_owned();
+        let own = self.user_id();
+        let ev = room.event(&eid, None).await?;
+        let Some(mut msg) = raw_json(ev.raw()).and_then(|v| parse_event(&v, &own)) else {
+            return Ok(None);
+        };
+        let opts = RelationsOptions {
+            dir: Direction::Backward,
+            limit: Some(UInt::from(100u32)),
+            include_relations: IncludeRelations::AllRelations,
+            ..Default::default()
+        };
+        if let Ok(rel) = room.relations(eid, opts).await {
+            let mut raw: Vec<Value> = rel.chunk.iter().filter_map(|e| raw_json(e.raw())).collect();
+            raw.reverse();
+            if let Some(r) = content::collect_reactions(&raw, &own).remove(event_id) {
+                msg.reactions = r;
+            }
+            for v in &raw {
+                if let Some((target, body)) = model::parse_edit(v)
+                    && target == event_id
+                    && msg.media.is_none()
+                {
+                    msg.body = body;
+                    msg.edited = true;
+                }
+            }
+        }
+        let mut one = vec![msg];
+        self.fill_sender_names(&room, &mut one).await;
+        Ok(one.pop())
     }
 
     /// Mark a room read up to `event_id` (default: its latest message):
@@ -733,6 +892,12 @@ impl CrosschatClient {
     }
 
     /// Create a private group room and invite users. Returns the room id.
+    /// The underlying matrix-sdk client (integration tests).
+    #[doc(hidden)]
+    pub fn sdk(&self) -> &Client {
+        &self.client
+    }
+
     pub async fn create_group(&self, name: &str, invites: &[String]) -> Result<String> {
         let mut req = create_room::v3::Request::new();
         req.name = Some(name.to_owned());
