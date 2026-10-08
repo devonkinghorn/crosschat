@@ -21,6 +21,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
   AppState get s => widget.state;
 
   @override
+  void initState() {
+    super.initState();
+    // Networks may have been added or removed elsewhere (another device, the API).
+    s.refreshBridges().catchError((_) {});
+  }
+
+  @override
   void dispose() {
     _daemonUrl.dispose();
     _extractor.dispose();
