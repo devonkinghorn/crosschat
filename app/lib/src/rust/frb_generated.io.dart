@@ -37,7 +37,13 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   bool dco_decode_box_autoadd_bool(dynamic raw);
 
   @protected
+  ChatMedia dco_decode_box_autoadd_chat_media(dynamic raw);
+
+  @protected
   ChatMessage dco_decode_box_autoadd_chat_message(dynamic raw);
+
+  @protected
+  ChatTapback dco_decode_box_autoadd_chat_tapback(dynamic raw);
 
   @protected
   PlatformInt64 dco_decode_box_autoadd_i_64(dynamic raw);
@@ -49,10 +55,25 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   ThreadInfo dco_decode_box_autoadd_thread_info(dynamic raw);
 
   @protected
+  int dco_decode_box_autoadd_u_32(dynamic raw);
+
+  @protected
+  BigInt dco_decode_box_autoadd_u_64(dynamic raw);
+
+  @protected
+  ChatMedia dco_decode_chat_media(dynamic raw);
+
+  @protected
   ChatMessage dco_decode_chat_message(dynamic raw);
 
   @protected
+  ChatReaction dco_decode_chat_reaction(dynamic raw);
+
+  @protected
   ChatRoom dco_decode_chat_room(dynamic raw);
+
+  @protected
+  ChatTapback dco_decode_chat_tapback(dynamic raw);
 
   @protected
   CoreUpdate dco_decode_core_update(dynamic raw);
@@ -70,6 +91,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<ChatMessage> dco_decode_list_chat_message(dynamic raw);
 
   @protected
+  List<ChatReaction> dco_decode_list_chat_reaction(dynamic raw);
+
+  @protected
   List<ChatRoom> dco_decode_list_chat_room(dynamic raw);
 
   @protected
@@ -85,7 +109,13 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   bool? dco_decode_opt_box_autoadd_bool(dynamic raw);
 
   @protected
+  ChatMedia? dco_decode_opt_box_autoadd_chat_media(dynamic raw);
+
+  @protected
   ChatMessage? dco_decode_opt_box_autoadd_chat_message(dynamic raw);
+
+  @protected
+  ChatTapback? dco_decode_opt_box_autoadd_chat_tapback(dynamic raw);
 
   @protected
   PlatformInt64? dco_decode_opt_box_autoadd_i_64(dynamic raw);
@@ -95,6 +125,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   ThreadInfo? dco_decode_opt_box_autoadd_thread_info(dynamic raw);
+
+  @protected
+  int? dco_decode_opt_box_autoadd_u_32(dynamic raw);
+
+  @protected
+  BigInt? dco_decode_opt_box_autoadd_u_64(dynamic raw);
 
   @protected
   SessionInfo dco_decode_session_info(dynamic raw);
@@ -132,7 +168,13 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   bool sse_decode_box_autoadd_bool(SseDeserializer deserializer);
 
   @protected
+  ChatMedia sse_decode_box_autoadd_chat_media(SseDeserializer deserializer);
+
+  @protected
   ChatMessage sse_decode_box_autoadd_chat_message(SseDeserializer deserializer);
+
+  @protected
+  ChatTapback sse_decode_box_autoadd_chat_tapback(SseDeserializer deserializer);
 
   @protected
   PlatformInt64 sse_decode_box_autoadd_i_64(SseDeserializer deserializer);
@@ -144,10 +186,25 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   ThreadInfo sse_decode_box_autoadd_thread_info(SseDeserializer deserializer);
 
   @protected
+  int sse_decode_box_autoadd_u_32(SseDeserializer deserializer);
+
+  @protected
+  BigInt sse_decode_box_autoadd_u_64(SseDeserializer deserializer);
+
+  @protected
+  ChatMedia sse_decode_chat_media(SseDeserializer deserializer);
+
+  @protected
   ChatMessage sse_decode_chat_message(SseDeserializer deserializer);
 
   @protected
+  ChatReaction sse_decode_chat_reaction(SseDeserializer deserializer);
+
+  @protected
   ChatRoom sse_decode_chat_room(SseDeserializer deserializer);
+
+  @protected
+  ChatTapback sse_decode_chat_tapback(SseDeserializer deserializer);
 
   @protected
   CoreUpdate sse_decode_core_update(SseDeserializer deserializer);
@@ -163,6 +220,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<ChatMessage> sse_decode_list_chat_message(SseDeserializer deserializer);
+
+  @protected
+  List<ChatReaction> sse_decode_list_chat_reaction(
+    SseDeserializer deserializer,
+  );
 
   @protected
   List<ChatRoom> sse_decode_list_chat_room(SseDeserializer deserializer);
@@ -182,7 +244,17 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   bool? sse_decode_opt_box_autoadd_bool(SseDeserializer deserializer);
 
   @protected
+  ChatMedia? sse_decode_opt_box_autoadd_chat_media(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   ChatMessage? sse_decode_opt_box_autoadd_chat_message(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  ChatTapback? sse_decode_opt_box_autoadd_chat_tapback(
     SseDeserializer deserializer,
   );
 
@@ -198,6 +270,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   ThreadInfo? sse_decode_opt_box_autoadd_thread_info(
     SseDeserializer deserializer,
   );
+
+  @protected
+  int? sse_decode_opt_box_autoadd_u_32(SseDeserializer deserializer);
+
+  @protected
+  BigInt? sse_decode_opt_box_autoadd_u_64(SseDeserializer deserializer);
 
   @protected
   SessionInfo sse_decode_session_info(SseDeserializer deserializer);
@@ -242,8 +320,20 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_box_autoadd_bool(bool self, SseSerializer serializer);
 
   @protected
+  void sse_encode_box_autoadd_chat_media(
+    ChatMedia self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_box_autoadd_chat_message(
     ChatMessage self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_box_autoadd_chat_tapback(
+    ChatTapback self,
     SseSerializer serializer,
   );
 
@@ -266,10 +356,25 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_box_autoadd_u_32(int self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_box_autoadd_u_64(BigInt self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_chat_media(ChatMedia self, SseSerializer serializer);
+
+  @protected
   void sse_encode_chat_message(ChatMessage self, SseSerializer serializer);
 
   @protected
+  void sse_encode_chat_reaction(ChatReaction self, SseSerializer serializer);
+
+  @protected
   void sse_encode_chat_room(ChatRoom self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_chat_tapback(ChatTapback self, SseSerializer serializer);
 
   @protected
   void sse_encode_core_update(CoreUpdate self, SseSerializer serializer);
@@ -286,6 +391,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_list_chat_message(
     List<ChatMessage> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_chat_reaction(
+    List<ChatReaction> self,
     SseSerializer serializer,
   );
 
@@ -311,8 +422,20 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_opt_box_autoadd_bool(bool? self, SseSerializer serializer);
 
   @protected
+  void sse_encode_opt_box_autoadd_chat_media(
+    ChatMedia? self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_opt_box_autoadd_chat_message(
     ChatMessage? self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_opt_box_autoadd_chat_tapback(
+    ChatTapback? self,
     SseSerializer serializer,
   );
 
@@ -333,6 +456,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
     ThreadInfo? self,
     SseSerializer serializer,
   );
+
+  @protected
+  void sse_encode_opt_box_autoadd_u_32(int? self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_opt_box_autoadd_u_64(BigInt? self, SseSerializer serializer);
 
   @protected
   void sse_encode_session_info(SessionInfo self, SseSerializer serializer);

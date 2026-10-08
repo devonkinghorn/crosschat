@@ -19,6 +19,8 @@ API_PORT="${API_PORT:-29300}"
 SERVER_NAME="crosschat.test"
 USER="${SMOKE_USER:-smoke$RANDOM}"
 PASS="${SMOKE_PASS:-smoke-pass-$RANDOM$RANDOM}"
+USER2="${USER}b"
+PASS2="$PASS-b"
 BRIDGES="${SMOKE_BRIDGES:-gmessages}"
 
 rm -rf "$WORK" && mkdir -p "$WORK"
@@ -67,7 +69,7 @@ def post(body):
         return json.load(urllib.request.urlopen(req))
     except urllib.error.HTTPError as e:
         return json.load(e)
-body = {"username": "$USER", "password": "$PASS", "inhibit_login": False}
+body = {"username": sys.argv[1], "password": sys.argv[2], "inhibit_login": False}
 r = post(body)
 session = r.get("session")
 body["auth"] = {"type": "m.login.registration_token", "token": "$TOKEN", "session": session}
@@ -80,11 +82,13 @@ assert "access_token" in r, r
 print(r["access_token"])
 PY
 }
-ACCESS=$(register)
-echo "registered @$USER:$SERVER_NAME"
+ACCESS=$(register "$USER" "$PASS")
+register "$USER2" "$PASS2" >/dev/null
+echo "registered @$USER:$SERVER_NAME and @$USER2:$SERVER_NAME"
 
 echo "== crosschat-core smoke test"
 CROSSCHAT_SMOKE_HS="http://127.0.0.1:$HS_PORT" CROSSCHAT_SMOKE_USER="$USER" CROSSCHAT_SMOKE_PASSWORD="$PASS" \
+  CROSSCHAT_SMOKE_USER2="$USER2" CROSSCHAT_SMOKE_PASSWORD2="$PASS2" \
   cargo test -q -p crosschat-core --manifest-path "$ROOT/Cargo.toml" --test smoke -- --nocapture
 
 echo "== bridges"

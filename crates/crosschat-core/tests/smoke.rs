@@ -129,3 +129,69 @@ async fn login_send_thread_sync_restore() {
             .is_none()
     );
 }
+
+/// Read state against a real homeserver: opening a chat (mark_read) clears
+/// the server's unread count, and the marked-unread flag round-trips.
+/// Needs a second account (`CROSSCHAT_SMOKE_USER2` / `_PASSWORD2`).
+#[tokio::test]
+async fn read_receipts_clear_unread_and_marked_unread_round_trips() {
+    let Some((hs, user, password)) = env() else {
+        eprintln!("skipping: CROSSCHAT_SMOKE_* not set");
+        return;
+    };
+    let (Ok(user2), Ok(password2)) = (
+        std::env::var("CROSSCHAT_SMOKE_USER2"),
+        std::env::var("CROSSCHAT_SMOKE_PASSWORD2"),
+    ) else {
+        eprintln!("skipping: CROSSCHAT_SMOKE_USER2 not set");
+        return;
+    };
+    let (da, db) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let alice = CrosschatClient::login(&hs, &user, &password, da.path(), "smoke a")
+        .await
+        .unwrap();
+    let bob = CrosschatClient::login(&hs, &user2, &password2, db.path(), "smoke b")
+        .await
+        .unwrap();
+    let room = alice
+        .create_group("Read state", &[bob.user_id()])
+        .await
+        .unwrap();
+    bob.sync_once().await.unwrap();
+    bob.join(&room).await.unwrap();
+    alice.sync_once().await.unwrap();
+    alice.send_text(&room, "one", None).await.unwrap();
+    let last = alice.send_text(&room, "two", None).await.unwrap();
+
+    let unread = |c: &CrosschatClient| {
+        let c = c.clone();
+        let room = room.clone();
+        async move {
+            c.sync_once().await.unwrap();
+            let r = c.rooms().await.unwrap();
+            let r = r.iter().find(|r| r.room_id == room).unwrap();
+            (r.unread, r.marked_unread)
+        }
+    };
+    let (n, marked) = unread(&bob).await;
+    assert!(n >= 2, "server counts the new messages as unread: {n}");
+    assert!(!marked);
+
+    // Opening the chat: receipt + fully_read on the latest message.
+    let marked_id = bob.mark_read(&room, None).await.unwrap();
+    assert_eq!(marked_id.as_deref(), Some(last.as_str()));
+    assert_eq!(unread(&bob).await, (0, false), "unread cleared by the receipt");
+    // Same receipt again is a no-op (not re-sent).
+    assert_eq!(bob.mark_read(&room, None).await.unwrap().as_deref(), Some(last.as_str()));
+
+    // Mark as unread / read.
+    bob.set_marked_unread(&room, true).await.unwrap();
+    assert_eq!(unread(&bob).await, (0, true));
+    bob.mark_read(&room, None).await.unwrap();
+    assert_eq!(unread(&bob).await, (0, false));
+
+    // New message after reading counts again.
+    alice.send_text(&room, "three", None).await.unwrap();
+    let (n, _) = unread(&bob).await;
+    assert_eq!(n, 1);
+}

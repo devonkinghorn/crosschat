@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import '../models.dart';
 
 /// Everything the UI needs from the Matrix core. Implemented by
@@ -17,6 +19,17 @@ abstract class ChatBackend {
   Future<List<Message>> timeline(String roomId, {int limit = 60});
   Future<List<Message>> thread(String roomId, String rootId, {int limit = 100});
   Future<String> sendText(String roomId, String body, {String? threadRoot});
+
+  /// Read receipt + fully-read marker on [eventId] (default: the latest
+  /// message), so the server and the bridged network mark the chat read.
+  Future<void> markRead(String roomId, {String? eventId});
+
+  /// MSC2867 marked-unread flag.
+  Future<void> setMarkedUnread(String roomId, bool unread);
+
+  /// Attachment / avatar bytes (decrypted). [source] is
+  /// [MediaAttachment.source] / `thumbnailSource` or an `mxc://` URL.
+  Future<Uint8List> mediaBytes(String source, {int? thumbWidth, int? thumbHeight});
 
   /// Plain-Matrix user directory (new-chat fallback).
   Future<List<DirectoryUser>> searchDirectory(String term);

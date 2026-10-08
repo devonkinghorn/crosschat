@@ -67,6 +67,33 @@ Future<String> sendText({
   threadRoot: threadRoot,
 );
 
+/// Mark a room read up to `event_id` (default: its latest message): read
+/// receipt + fully-read marker, clears marked-unread. Returns the event id.
+Future<String?> markRead({required String roomId, String? eventId}) => RustLib
+    .instance
+    .api
+    .crateApiMatrixMarkRead(roomId: roomId, eventId: eventId);
+
+/// Set / clear the room's marked-unread flag.
+Future<void> setMarkedUnread({required String roomId, required bool unread}) =>
+    RustLib.instance.api.crateApiMatrixSetMarkedUnread(
+      roomId: roomId,
+      unread: unread,
+    );
+
+/// Bytes of an attachment (decrypted) or avatar. `source` is
+/// `ChatMedia::source` / `thumbnail_source` or an `mxc://` URL; with a size,
+/// a server thumbnail is requested where possible.
+Future<Uint8List> mediaBytes({
+  required String source,
+  int? thumbWidth,
+  int? thumbHeight,
+}) => RustLib.instance.api.crateApiMatrixMediaBytes(
+  source: source,
+  thumbWidth: thumbWidth,
+  thumbHeight: thumbHeight,
+);
+
 Future<List<DirectoryUser>> searchDirectory({
   required String term,
   required int limit,
@@ -91,6 +118,58 @@ Future<String> joinRoom({required String roomIdOrAlias}) =>
 
 Future<void> logout() => RustLib.instance.api.crateApiMatrixLogout();
 
+/// Attachment; pass `source` to [`media_bytes`].
+class ChatMedia {
+  final String source;
+  final String? mimetype;
+  final BigInt? size;
+  final int? width;
+  final int? height;
+  final BigInt? durationMs;
+  final String filename;
+  final String? caption;
+  final String? thumbnailSource;
+
+  const ChatMedia({
+    required this.source,
+    this.mimetype,
+    this.size,
+    this.width,
+    this.height,
+    this.durationMs,
+    required this.filename,
+    this.caption,
+    this.thumbnailSource,
+  });
+
+  @override
+  int get hashCode =>
+      source.hashCode ^
+      mimetype.hashCode ^
+      size.hashCode ^
+      width.hashCode ^
+      height.hashCode ^
+      durationMs.hashCode ^
+      filename.hashCode ^
+      caption.hashCode ^
+      thumbnailSource.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ChatMedia &&
+          runtimeType == other.runtimeType &&
+          source == other.source &&
+          mimetype == other.mimetype &&
+          size == other.size &&
+          width == other.width &&
+          height == other.height &&
+          durationMs == other.durationMs &&
+          filename == other.filename &&
+          caption == other.caption &&
+          thumbnailSource == other.thumbnailSource;
+}
+
 class ChatMessage {
   final String eventId;
   final String sender;
@@ -107,6 +186,12 @@ class ChatMessage {
   final bool edited;
   final bool isOwn;
 
+  /// `mxc://` avatar of the sender in this room.
+  final String? senderAvatar;
+  final ChatMedia? media;
+  final List<ChatReaction> reactions;
+  final ChatTapback? tapback;
+
   const ChatMessage({
     required this.eventId,
     required this.sender,
@@ -119,6 +204,10 @@ class ChatMessage {
     this.thread,
     required this.edited,
     required this.isOwn,
+    this.senderAvatar,
+    this.media,
+    required this.reactions,
+    this.tapback,
   });
 
   @override
@@ -133,7 +222,11 @@ class ChatMessage {
       inReplyTo.hashCode ^
       thread.hashCode ^
       edited.hashCode ^
-      isOwn.hashCode;
+      isOwn.hashCode ^
+      senderAvatar.hashCode ^
+      media.hashCode ^
+      reactions.hashCode ^
+      tapback.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -150,7 +243,35 @@ class ChatMessage {
           inReplyTo == other.inReplyTo &&
           thread == other.thread &&
           edited == other.edited &&
-          isOwn == other.isOwn;
+          isOwn == other.isOwn &&
+          senderAvatar == other.senderAvatar &&
+          media == other.media &&
+          reactions == other.reactions &&
+          tapback == other.tapback;
+}
+
+class ChatReaction {
+  final String key;
+  final List<String> senders;
+  final bool own;
+
+  const ChatReaction({
+    required this.key,
+    required this.senders,
+    required this.own,
+  });
+
+  @override
+  int get hashCode => key.hashCode ^ senders.hashCode ^ own.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ChatReaction &&
+          runtimeType == other.runtimeType &&
+          key == other.key &&
+          senders == other.senders &&
+          own == other.own;
 }
 
 class ChatRoom {
@@ -175,6 +296,9 @@ class ChatRoom {
   final String? loginId;
   final String? roomType;
 
+  /// `m.marked_unread` / `com.famedly.marked_unread`.
+  final bool markedUnread;
+
   const ChatRoom({
     required this.roomId,
     required this.name,
@@ -193,6 +317,7 @@ class ChatRoom {
     this.protocolName,
     this.loginId,
     this.roomType,
+    required this.markedUnread,
   });
 
   @override
@@ -213,7 +338,8 @@ class ChatRoom {
       protocolId.hashCode ^
       protocolName.hashCode ^
       loginId.hashCode ^
-      roomType.hashCode;
+      roomType.hashCode ^
+      markedUnread.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -236,11 +362,50 @@ class ChatRoom {
           protocolId == other.protocolId &&
           protocolName == other.protocolName &&
           loginId == other.loginId &&
-          roomType == other.roomType;
+          roomType == other.roomType &&
+          markedUnread == other.markedUnread;
+}
+
+/// SMS/RCS tapback fallback text ("Loved “…”"), see `crosschat_core::Tapback`.
+class ChatTapback {
+  final String key;
+  final bool removed;
+  final String? targetText;
+  final bool truncated;
+  final String? targetKind;
+
+  const ChatTapback({
+    required this.key,
+    required this.removed,
+    this.targetText,
+    required this.truncated,
+    this.targetKind,
+  });
+
+  @override
+  int get hashCode =>
+      key.hashCode ^
+      removed.hashCode ^
+      targetText.hashCode ^
+      truncated.hashCode ^
+      targetKind.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ChatTapback &&
+          runtimeType == other.runtimeType &&
+          key == other.key &&
+          removed == other.removed &&
+          targetText == other.targetText &&
+          truncated == other.truncated &&
+          targetKind == other.targetKind;
 }
 
 /// Update pushed from the sync loop. `kind` is `rooms_changed`,
-/// `new_message` (with `room_id` + `message`) or `sync_state` (with `state`).
+/// `new_message` (with `room_id` + `message`), `timeline_changed` (with
+/// `room_id`: reactions, edits, redactions, member names changed) or
+/// `sync_state` (with `state`).
 /// A flat struct keeps the generated Dart free of code-gen dependencies.
 class CoreUpdate {
   final String kind;

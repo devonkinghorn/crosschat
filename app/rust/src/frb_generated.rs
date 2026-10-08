@@ -39,7 +39,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.13.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -361458389;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 557282177;
 
 // Section: executor
 
@@ -308,6 +308,87 @@ fn wire__crate__api__matrix__logout_impl(
         },
     )
 }
+fn wire__crate__api__matrix__mark_read_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_async::<flutter_rust_bridge::for_generated::SseCodec, _, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "mark_read",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_room_id = <String>::sse_decode(&mut deserializer);
+            let api_event_id = <Option<String>>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| async move {
+                transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(
+                    (move || async move {
+                        let output_ok =
+                            crate::api::matrix::mark_read(api_room_id, api_event_id).await?;
+                        std::result::Result::Ok(output_ok)
+                    })()
+                    .await,
+                )
+            }
+        },
+    )
+}
+fn wire__crate__api__matrix__media_bytes_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_async::<flutter_rust_bridge::for_generated::SseCodec, _, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "media_bytes",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_source = <String>::sse_decode(&mut deserializer);
+            let api_thumb_width = <Option<u32>>::sse_decode(&mut deserializer);
+            let api_thumb_height = <Option<u32>>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| async move {
+                transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(
+                    (move || async move {
+                        let output_ok = crate::api::matrix::media_bytes(
+                            api_source,
+                            api_thumb_width,
+                            api_thumb_height,
+                        )
+                        .await?;
+                        std::result::Result::Ok(output_ok)
+                    })()
+                    .await,
+                )
+            }
+        },
+    )
+}
 fn wire__crate__api__matrix__probe_homeserver_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
@@ -496,6 +577,44 @@ fn wire__crate__api__matrix__send_text_impl(
         },
     )
 }
+fn wire__crate__api__matrix__set_marked_unread_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_async::<flutter_rust_bridge::for_generated::SseCodec, _, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "set_marked_unread",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_room_id = <String>::sse_decode(&mut deserializer);
+            let api_unread = <bool>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| async move {
+                transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(
+                    (move || async move {
+                        let output_ok =
+                            crate::api::matrix::set_marked_unread(api_room_id, api_unread).await?;
+                        std::result::Result::Ok(output_ok)
+                    })()
+                    .await,
+                )
+            }
+        },
+    )
+}
 fn wire__crate__api__matrix__subscribe_updates_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
@@ -648,6 +767,32 @@ impl SseDecode for bool {
     }
 }
 
+impl SseDecode for crate::api::matrix::ChatMedia {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_source = <String>::sse_decode(deserializer);
+        let mut var_mimetype = <Option<String>>::sse_decode(deserializer);
+        let mut var_size = <Option<u64>>::sse_decode(deserializer);
+        let mut var_width = <Option<u32>>::sse_decode(deserializer);
+        let mut var_height = <Option<u32>>::sse_decode(deserializer);
+        let mut var_durationMs = <Option<u64>>::sse_decode(deserializer);
+        let mut var_filename = <String>::sse_decode(deserializer);
+        let mut var_caption = <Option<String>>::sse_decode(deserializer);
+        let mut var_thumbnailSource = <Option<String>>::sse_decode(deserializer);
+        return crate::api::matrix::ChatMedia {
+            source: var_source,
+            mimetype: var_mimetype,
+            size: var_size,
+            width: var_width,
+            height: var_height,
+            duration_ms: var_durationMs,
+            filename: var_filename,
+            caption: var_caption,
+            thumbnail_source: var_thumbnailSource,
+        };
+    }
+}
+
 impl SseDecode for crate::api::matrix::ChatMessage {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -662,6 +807,10 @@ impl SseDecode for crate::api::matrix::ChatMessage {
         let mut var_thread = <Option<crate::api::matrix::ThreadInfo>>::sse_decode(deserializer);
         let mut var_edited = <bool>::sse_decode(deserializer);
         let mut var_isOwn = <bool>::sse_decode(deserializer);
+        let mut var_senderAvatar = <Option<String>>::sse_decode(deserializer);
+        let mut var_media = <Option<crate::api::matrix::ChatMedia>>::sse_decode(deserializer);
+        let mut var_reactions = <Vec<crate::api::matrix::ChatReaction>>::sse_decode(deserializer);
+        let mut var_tapback = <Option<crate::api::matrix::ChatTapback>>::sse_decode(deserializer);
         return crate::api::matrix::ChatMessage {
             event_id: var_eventId,
             sender: var_sender,
@@ -674,6 +823,24 @@ impl SseDecode for crate::api::matrix::ChatMessage {
             thread: var_thread,
             edited: var_edited,
             is_own: var_isOwn,
+            sender_avatar: var_senderAvatar,
+            media: var_media,
+            reactions: var_reactions,
+            tapback: var_tapback,
+        };
+    }
+}
+
+impl SseDecode for crate::api::matrix::ChatReaction {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_key = <String>::sse_decode(deserializer);
+        let mut var_senders = <Vec<String>>::sse_decode(deserializer);
+        let mut var_own = <bool>::sse_decode(deserializer);
+        return crate::api::matrix::ChatReaction {
+            key: var_key,
+            senders: var_senders,
+            own: var_own,
         };
     }
 }
@@ -698,6 +865,7 @@ impl SseDecode for crate::api::matrix::ChatRoom {
         let mut var_protocolName = <Option<String>>::sse_decode(deserializer);
         let mut var_loginId = <Option<String>>::sse_decode(deserializer);
         let mut var_roomType = <Option<String>>::sse_decode(deserializer);
+        let mut var_markedUnread = <bool>::sse_decode(deserializer);
         return crate::api::matrix::ChatRoom {
             room_id: var_roomId,
             name: var_name,
@@ -716,6 +884,25 @@ impl SseDecode for crate::api::matrix::ChatRoom {
             protocol_name: var_protocolName,
             login_id: var_loginId,
             room_type: var_roomType,
+            marked_unread: var_markedUnread,
+        };
+    }
+}
+
+impl SseDecode for crate::api::matrix::ChatTapback {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_key = <String>::sse_decode(deserializer);
+        let mut var_removed = <bool>::sse_decode(deserializer);
+        let mut var_targetText = <Option<String>>::sse_decode(deserializer);
+        let mut var_truncated = <bool>::sse_decode(deserializer);
+        let mut var_targetKind = <Option<String>>::sse_decode(deserializer);
+        return crate::api::matrix::ChatTapback {
+            key: var_key,
+            removed: var_removed,
+            target_text: var_targetText,
+            truncated: var_truncated,
+            target_kind: var_targetKind,
         };
     }
 }
@@ -774,6 +961,18 @@ impl SseDecode for Vec<crate::api::matrix::ChatMessage> {
         let mut ans_ = Vec::with_capacity(len_ as usize);
         for idx_ in 0..len_ {
             ans_.push(<crate::api::matrix::ChatMessage>::sse_decode(deserializer));
+        }
+        return ans_;
+    }
+}
+
+impl SseDecode for Vec<crate::api::matrix::ChatReaction> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut len_ = <i32>::sse_decode(deserializer);
+        let mut ans_ = Vec::with_capacity(len_ as usize);
+        for idx_ in 0..len_ {
+            ans_.push(<crate::api::matrix::ChatReaction>::sse_decode(deserializer));
         }
         return ans_;
     }
@@ -839,11 +1038,33 @@ impl SseDecode for Option<bool> {
     }
 }
 
+impl SseDecode for Option<crate::api::matrix::ChatMedia> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        if (<bool>::sse_decode(deserializer)) {
+            return Some(<crate::api::matrix::ChatMedia>::sse_decode(deserializer));
+        } else {
+            return None;
+        }
+    }
+}
+
 impl SseDecode for Option<crate::api::matrix::ChatMessage> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         if (<bool>::sse_decode(deserializer)) {
             return Some(<crate::api::matrix::ChatMessage>::sse_decode(deserializer));
+        } else {
+            return None;
+        }
+    }
+}
+
+impl SseDecode for Option<crate::api::matrix::ChatTapback> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        if (<bool>::sse_decode(deserializer)) {
+            return Some(<crate::api::matrix::ChatTapback>::sse_decode(deserializer));
         } else {
             return None;
         }
@@ -877,6 +1098,28 @@ impl SseDecode for Option<crate::api::matrix::ThreadInfo> {
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         if (<bool>::sse_decode(deserializer)) {
             return Some(<crate::api::matrix::ThreadInfo>::sse_decode(deserializer));
+        } else {
+            return None;
+        }
+    }
+}
+
+impl SseDecode for Option<u32> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        if (<bool>::sse_decode(deserializer)) {
+            return Some(<u32>::sse_decode(deserializer));
+        } else {
+            return None;
+        }
+    }
+}
+
+impl SseDecode for Option<u64> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        if (<bool>::sse_decode(deserializer)) {
+            return Some(<u64>::sse_decode(deserializer));
         } else {
             return None;
         }
@@ -964,14 +1207,17 @@ fn pde_ffi_dispatcher_primary_impl(
         5 => wire__crate__api__matrix__list_rooms_impl(port, ptr, rust_vec_len, data_len),
         6 => wire__crate__api__matrix__login_impl(port, ptr, rust_vec_len, data_len),
         7 => wire__crate__api__matrix__logout_impl(port, ptr, rust_vec_len, data_len),
-        8 => wire__crate__api__matrix__probe_homeserver_impl(port, ptr, rust_vec_len, data_len),
-        9 => wire__crate__api__matrix__restore_session_impl(port, ptr, rust_vec_len, data_len),
-        10 => wire__crate__api__matrix__room_timeline_impl(port, ptr, rust_vec_len, data_len),
-        11 => wire__crate__api__matrix__search_directory_impl(port, ptr, rust_vec_len, data_len),
-        12 => wire__crate__api__matrix__send_text_impl(port, ptr, rust_vec_len, data_len),
-        13 => wire__crate__api__matrix__subscribe_updates_impl(port, ptr, rust_vec_len, data_len),
-        14 => wire__crate__api__matrix__sync_once_impl(port, ptr, rust_vec_len, data_len),
-        15 => wire__crate__api__matrix__thread_timeline_impl(port, ptr, rust_vec_len, data_len),
+        8 => wire__crate__api__matrix__mark_read_impl(port, ptr, rust_vec_len, data_len),
+        9 => wire__crate__api__matrix__media_bytes_impl(port, ptr, rust_vec_len, data_len),
+        10 => wire__crate__api__matrix__probe_homeserver_impl(port, ptr, rust_vec_len, data_len),
+        11 => wire__crate__api__matrix__restore_session_impl(port, ptr, rust_vec_len, data_len),
+        12 => wire__crate__api__matrix__room_timeline_impl(port, ptr, rust_vec_len, data_len),
+        13 => wire__crate__api__matrix__search_directory_impl(port, ptr, rust_vec_len, data_len),
+        14 => wire__crate__api__matrix__send_text_impl(port, ptr, rust_vec_len, data_len),
+        15 => wire__crate__api__matrix__set_marked_unread_impl(port, ptr, rust_vec_len, data_len),
+        16 => wire__crate__api__matrix__subscribe_updates_impl(port, ptr, rust_vec_len, data_len),
+        17 => wire__crate__api__matrix__sync_once_impl(port, ptr, rust_vec_len, data_len),
+        18 => wire__crate__api__matrix__thread_timeline_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -991,6 +1237,31 @@ fn pde_ffi_dispatcher_sync_impl(
 // Section: rust2dart
 
 // Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::matrix::ChatMedia {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.source.into_into_dart().into_dart(),
+            self.mimetype.into_into_dart().into_dart(),
+            self.size.into_into_dart().into_dart(),
+            self.width.into_into_dart().into_dart(),
+            self.height.into_into_dart().into_dart(),
+            self.duration_ms.into_into_dart().into_dart(),
+            self.filename.into_into_dart().into_dart(),
+            self.caption.into_into_dart().into_dart(),
+            self.thumbnail_source.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::api::matrix::ChatMedia {}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::matrix::ChatMedia>
+    for crate::api::matrix::ChatMedia
+{
+    fn into_into_dart(self) -> crate::api::matrix::ChatMedia {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
 impl flutter_rust_bridge::IntoDart for crate::api::matrix::ChatMessage {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         [
@@ -1005,6 +1276,10 @@ impl flutter_rust_bridge::IntoDart for crate::api::matrix::ChatMessage {
             self.thread.into_into_dart().into_dart(),
             self.edited.into_into_dart().into_dart(),
             self.is_own.into_into_dart().into_dart(),
+            self.sender_avatar.into_into_dart().into_dart(),
+            self.media.into_into_dart().into_dart(),
+            self.reactions.into_into_dart().into_dart(),
+            self.tapback.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -1017,6 +1292,28 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::matrix::ChatMessage>
     for crate::api::matrix::ChatMessage
 {
     fn into_into_dart(self) -> crate::api::matrix::ChatMessage {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::matrix::ChatReaction {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.key.into_into_dart().into_dart(),
+            self.senders.into_into_dart().into_dart(),
+            self.own.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::matrix::ChatReaction
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::matrix::ChatReaction>
+    for crate::api::matrix::ChatReaction
+{
+    fn into_into_dart(self) -> crate::api::matrix::ChatReaction {
         self
     }
 }
@@ -1041,6 +1338,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::matrix::ChatRoom {
             self.protocol_name.into_into_dart().into_dart(),
             self.login_id.into_into_dart().into_dart(),
             self.room_type.into_into_dart().into_dart(),
+            self.marked_unread.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -1050,6 +1348,30 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::matrix::ChatRoom>
     for crate::api::matrix::ChatRoom
 {
     fn into_into_dart(self) -> crate::api::matrix::ChatRoom {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::matrix::ChatTapback {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.key.into_into_dart().into_dart(),
+            self.removed.into_into_dart().into_dart(),
+            self.target_text.into_into_dart().into_dart(),
+            self.truncated.into_into_dart().into_dart(),
+            self.target_kind.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::matrix::ChatTapback
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::matrix::ChatTapback>
+    for crate::api::matrix::ChatTapback
+{
+    fn into_into_dart(self) -> crate::api::matrix::ChatTapback {
         self
     }
 }
@@ -1174,6 +1496,21 @@ impl SseEncode for bool {
     }
 }
 
+impl SseEncode for crate::api::matrix::ChatMedia {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <String>::sse_encode(self.source, serializer);
+        <Option<String>>::sse_encode(self.mimetype, serializer);
+        <Option<u64>>::sse_encode(self.size, serializer);
+        <Option<u32>>::sse_encode(self.width, serializer);
+        <Option<u32>>::sse_encode(self.height, serializer);
+        <Option<u64>>::sse_encode(self.duration_ms, serializer);
+        <String>::sse_encode(self.filename, serializer);
+        <Option<String>>::sse_encode(self.caption, serializer);
+        <Option<String>>::sse_encode(self.thumbnail_source, serializer);
+    }
+}
+
 impl SseEncode for crate::api::matrix::ChatMessage {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -1188,6 +1525,19 @@ impl SseEncode for crate::api::matrix::ChatMessage {
         <Option<crate::api::matrix::ThreadInfo>>::sse_encode(self.thread, serializer);
         <bool>::sse_encode(self.edited, serializer);
         <bool>::sse_encode(self.is_own, serializer);
+        <Option<String>>::sse_encode(self.sender_avatar, serializer);
+        <Option<crate::api::matrix::ChatMedia>>::sse_encode(self.media, serializer);
+        <Vec<crate::api::matrix::ChatReaction>>::sse_encode(self.reactions, serializer);
+        <Option<crate::api::matrix::ChatTapback>>::sse_encode(self.tapback, serializer);
+    }
+}
+
+impl SseEncode for crate::api::matrix::ChatReaction {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <String>::sse_encode(self.key, serializer);
+        <Vec<String>>::sse_encode(self.senders, serializer);
+        <bool>::sse_encode(self.own, serializer);
     }
 }
 
@@ -1211,6 +1561,18 @@ impl SseEncode for crate::api::matrix::ChatRoom {
         <Option<String>>::sse_encode(self.protocol_name, serializer);
         <Option<String>>::sse_encode(self.login_id, serializer);
         <Option<String>>::sse_encode(self.room_type, serializer);
+        <bool>::sse_encode(self.marked_unread, serializer);
+    }
+}
+
+impl SseEncode for crate::api::matrix::ChatTapback {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <String>::sse_encode(self.key, serializer);
+        <bool>::sse_encode(self.removed, serializer);
+        <Option<String>>::sse_encode(self.target_text, serializer);
+        <bool>::sse_encode(self.truncated, serializer);
+        <Option<String>>::sse_encode(self.target_kind, serializer);
     }
 }
 
@@ -1255,6 +1617,16 @@ impl SseEncode for Vec<crate::api::matrix::ChatMessage> {
         <i32>::sse_encode(self.len() as _, serializer);
         for item in self {
             <crate::api::matrix::ChatMessage>::sse_encode(item, serializer);
+        }
+    }
+}
+
+impl SseEncode for Vec<crate::api::matrix::ChatReaction> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(self.len() as _, serializer);
+        for item in self {
+            <crate::api::matrix::ChatReaction>::sse_encode(item, serializer);
         }
     }
 }
@@ -1309,12 +1681,32 @@ impl SseEncode for Option<bool> {
     }
 }
 
+impl SseEncode for Option<crate::api::matrix::ChatMedia> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <bool>::sse_encode(self.is_some(), serializer);
+        if let Some(value) = self {
+            <crate::api::matrix::ChatMedia>::sse_encode(value, serializer);
+        }
+    }
+}
+
 impl SseEncode for Option<crate::api::matrix::ChatMessage> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <bool>::sse_encode(self.is_some(), serializer);
         if let Some(value) = self {
             <crate::api::matrix::ChatMessage>::sse_encode(value, serializer);
+        }
+    }
+}
+
+impl SseEncode for Option<crate::api::matrix::ChatTapback> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <bool>::sse_encode(self.is_some(), serializer);
+        if let Some(value) = self {
+            <crate::api::matrix::ChatTapback>::sse_encode(value, serializer);
         }
     }
 }
@@ -1345,6 +1737,26 @@ impl SseEncode for Option<crate::api::matrix::ThreadInfo> {
         <bool>::sse_encode(self.is_some(), serializer);
         if let Some(value) = self {
             <crate::api::matrix::ThreadInfo>::sse_encode(value, serializer);
+        }
+    }
+}
+
+impl SseEncode for Option<u32> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <bool>::sse_encode(self.is_some(), serializer);
+        if let Some(value) = self {
+            <u32>::sse_encode(value, serializer);
+        }
+    }
+}
+
+impl SseEncode for Option<u64> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <bool>::sse_encode(self.is_some(), serializer);
+        if let Some(value) = self {
+            <u64>::sse_encode(value, serializer);
         }
     }
 }

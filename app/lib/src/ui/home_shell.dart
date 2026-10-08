@@ -136,7 +136,7 @@ class NetworkRail extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final total = state.rooms.fold<int>(0, (a, r) => a + r.unread);
+    final total = state.rooms.fold<int>(0, (a, r) => a + r.badgeCount);
     return Container(
       width: _railWidth,
       color: CC.rail,
@@ -384,10 +384,24 @@ class ChatSidebar extends StatelessWidget {
                     children: [
                       if (groups.isNotEmpty) const _SectionLabel('Channels & groups'),
                       for (final r in groups)
-                        _RoomTile(room: r, selected: r.roomId == state.selectedRoomId, showNetwork: state.networkFilter == null, onTap: () => onSelect(r)),
+                        _RoomTile(
+                          room: r,
+                          selected: r.roomId == state.selectedRoomId,
+                          showNetwork: state.networkFilter == null,
+                          onTap: () => onSelect(r),
+                          onMarkRead: () => state.markRead(r.roomId),
+                          onMarkUnread: () => state.markUnread(r.roomId),
+                        ),
                       if (dms.isNotEmpty) const _SectionLabel('Direct messages'),
                       for (final r in dms)
-                        _RoomTile(room: r, selected: r.roomId == state.selectedRoomId, showNetwork: state.networkFilter == null, onTap: () => onSelect(r)),
+                        _RoomTile(
+                          room: r,
+                          selected: r.roomId == state.selectedRoomId,
+                          showNetwork: state.networkFilter == null,
+                          onTap: () => onSelect(r),
+                          onMarkRead: () => state.markRead(r.roomId),
+                          onMarkUnread: () => state.markUnread(r.roomId),
+                        ),
                     ],
                   ),
           ),
@@ -478,106 +492,153 @@ class _SectionLabel extends StatelessWidget {
 }
 
 class _RoomTile extends StatelessWidget {
-  const _RoomTile({required this.room, required this.selected, required this.showNetwork, required this.onTap});
+  const _RoomTile({
+    required this.room,
+    required this.selected,
+    required this.showNetwork,
+    required this.onTap,
+    required this.onMarkRead,
+    required this.onMarkUnread,
+  });
   final Room room;
   final bool selected;
   final bool showNetwork;
   final VoidCallback onTap;
+  final VoidCallback onMarkRead;
+  final VoidCallback onMarkUnread;
+
+  /// Right-click (desktop) / long-press (mobile) menu.
+  Future<void> _showMenu(BuildContext context, Offset position) async {
+    final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
+    final choice = await showMenu<String>(
+      context: context,
+      position: RelativeRect.fromRect(position & const Size(1, 1), Offset.zero & overlay.size),
+      color: CC.panel,
+      items: [
+        if (room.isUnread)
+          const PopupMenuItem(
+            key: Key('menu-mark-read'),
+            value: 'read',
+            child: ListTile(dense: true, leading: Icon(Icons.mark_chat_read_outlined, size: 18), title: Text('Mark as read')),
+          )
+        else
+          const PopupMenuItem(
+            key: Key('menu-mark-unread'),
+            value: 'unread',
+            child: ListTile(dense: true, leading: Icon(Icons.mark_chat_unread_outlined, size: 18), title: Text('Mark as unread')),
+          ),
+      ],
+    );
+    if (choice == 'read') onMarkRead();
+    if (choice == 'unread') onMarkUnread();
+  }
 
   @override
   Widget build(BuildContext context) {
     final style = networkStyle(room.networkId);
-    final bold = room.unread > 0;
+    final bold = room.isUnread;
     final sub = room.subProtocol;
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 1),
       child: Material(
         color: selected ? CC.selected : Colors.transparent,
         borderRadius: BorderRadius.circular(4),
-        child: InkWell(
-          key: Key('room-${room.roomId}'),
-          borderRadius: BorderRadius.circular(4),
-          hoverColor: CC.hover,
-          onTap: onTap,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-            child: Row(
-              children: [
-                Stack(
-                  clipBehavior: Clip.none,
-                  children: [
-                    room.isDm
-                        ? Avatar(name: room.name, seed: room.roomId, size: 30)
-                        : Container(
-                            width: 30,
-                            height: 30,
-                            decoration: BoxDecoration(color: CC.input, borderRadius: BorderRadius.circular(8)),
-                            child: const Icon(Icons.tag_rounded, color: CC.textMuted, size: 18),
-                          ),
-                    if (showNetwork)
-                      Positioned(
-                        right: -4,
-                        bottom: -4,
-                        child: Container(
-                          width: 16,
-                          height: 16,
-                          decoration: BoxDecoration(
-                            color: style.color,
-                            shape: BoxShape.circle,
-                            border: Border.all(color: CC.sidebar, width: 2),
-                          ),
-                          child: Icon(style.icon, size: 8, color: Colors.white),
-                        ),
-                      ),
-                  ],
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+        child: GestureDetector(
+          onSecondaryTapDown: (d) => _showMenu(context, d.globalPosition),
+          onLongPressStart: (d) => _showMenu(context, d.globalPosition),
+          child: InkWell(
+            key: Key('room-${room.roomId}'),
+            borderRadius: BorderRadius.circular(4),
+            hoverColor: CC.hover,
+            onTap: onTap,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+              child: Row(
+                children: [
+                  Stack(
+                    clipBehavior: Clip.none,
                     children: [
-                      Row(
-                        children: [
-                          Flexible(
-                            child: Text(
-                              room.name,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                fontSize: 14.5,
-                                fontWeight: bold ? FontWeight.w700 : FontWeight.w500,
-                                color: bold || selected ? Colors.white : CC.textMuted,
-                              ),
+                      room.isDm
+                          ? Avatar(name: room.name, seed: room.roomId, size: 30)
+                          : Container(
+                              width: 30,
+                              height: 30,
+                              decoration: BoxDecoration(color: CC.input, borderRadius: BorderRadius.circular(8)),
+                              child: const Icon(Icons.tag_rounded, color: CC.textMuted, size: 18),
                             ),
+                      if (showNetwork)
+                        Positioned(
+                          right: -4,
+                          bottom: -4,
+                          child: Container(
+                            width: 16,
+                            height: 16,
+                            decoration: BoxDecoration(
+                              color: style.color,
+                              shape: BoxShape.circle,
+                              border: Border.all(color: CC.sidebar, width: 2),
+                            ),
+                            child: Icon(style.icon, size: 8, color: Colors.white),
                           ),
-                          if (sub != null) ...[
-                            const SizedBox(width: 6),
-                            Container(
-                              key: Key('subprotocol-${room.roomId}'),
-                              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 0.5),
-                              decoration: BoxDecoration(
-                                border: Border.all(color: CC.textFaint),
-                                borderRadius: BorderRadius.circular(3),
-                              ),
-                              child: Text(
-                                sub,
-                                style: const TextStyle(fontSize: 9.5, color: CC.textMuted, fontWeight: FontWeight.w600),
-                              ),
-                            ),
-                          ],
-                        ],
-                      ),
-                      if (room.lastMessage != null)
-                        Text(
-                          room.lastMessage!,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(fontSize: 12, color: CC.textFaint),
                         ),
                     ],
                   ),
-                ),
-                if (room.unread > 0) UnreadBadge(count: room.unread),
-              ],
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Flexible(
+                              child: Text(
+                                room.name,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  fontSize: 14.5,
+                                  fontWeight: bold ? FontWeight.w700 : FontWeight.w500,
+                                  color: bold || selected ? Colors.white : CC.textMuted,
+                                ),
+                              ),
+                            ),
+                            if (sub != null) ...[
+                              const SizedBox(width: 6),
+                              Container(
+                                key: Key('subprotocol-${room.roomId}'),
+                                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 0.5),
+                                decoration: BoxDecoration(
+                                  border: Border.all(color: CC.textFaint),
+                                  borderRadius: BorderRadius.circular(3),
+                                ),
+                                child: Text(
+                                  sub,
+                                  style: const TextStyle(fontSize: 9.5, color: CC.textMuted, fontWeight: FontWeight.w600),
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
+                        if (room.lastMessage != null)
+                          Text(
+                            room.lastMessage!,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontSize: 12, color: CC.textFaint),
+                          ),
+                      ],
+                    ),
+                  ),
+                  if (room.unread > 0)
+                    UnreadBadge(key: Key('unread-${room.roomId}'), count: room.unread)
+                  else if (room.markedUnread)
+                    Container(
+                      key: Key('marked-unread-${room.roomId}'),
+                      width: 10,
+                      height: 10,
+                      decoration: const BoxDecoration(color: CC.danger, shape: BoxShape.circle),
+                    ),
+                ],
+              ),
             ),
           ),
         ),

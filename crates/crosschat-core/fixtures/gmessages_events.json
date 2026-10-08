@@ -1,0 +1,314 @@
+[
+ {
+  "type": "m.room.member",
+  "state_key": "@gmessages_1.14:localhost",
+  "sender": "@gmessages_1.14:localhost",
+  "event_id": "$m1",
+  "origin_server_ts": 1000,
+  "content": {
+   "avatar_url": "mxc://localhost/alexavatar",
+   "displayname": "Alex Rivera",
+   "membership": "join"
+  }
+ },
+ {
+  "type": "m.room.message",
+  "sender": "@devon:localhost",
+  "event_id": "$t1",
+  "origin_server_ts": 2000,
+  "content": {
+   "com.beeper.disappearing_timer": {},
+   "fi.mau.gmessages.raw_debug_data": "GgQSAggB",
+   "m.mentions": {},
+   "body": "Dinner at 7 on Sunday?",
+   "fi.mau.double_puppet_source": "mautrix-gmessages",
+   "fi.mau.double_puppet_ts": 2000,
+   "msgtype": "m.text"
+  }
+ },
+ {
+  "type": "m.room.message",
+  "sender": "@gmessages_1.14:localhost",
+  "event_id": "$img1",
+  "origin_server_ts": 3000,
+  "content": {
+   "com.beeper.disappearing_timer": {},
+   "fi.mau.gmessages.raw_debug_data": "GgQSAggB",
+   "m.mentions": {},
+   "body": "IMG_3406.heic",
+   "file": {
+    "v": "v2",
+    "url": "mxc://localhost/heicasjpeg",
+    "key": {
+     "alg": "A256CTR",
+     "ext": true,
+     "k": "qcHVMSgYg-71CauWBezXI5qkaRb0LuIy-Wx5kIaHMIA",
+     "key_ops": [
+      "encrypt",
+      "decrypt"
+     ],
+     "kty": "oct"
+    },
+    "iv": "X85+XgHN+HEAAAAAAAAAAA",
+    "hashes": {
+     "sha256": "5qG4fFnbbVdlAB1Q72JDKwCagV6Dbkx9uds4rSak37c"
+    }
+   },
+   "info": {
+    "mimetype": "image/jpeg",
+    "size": 127496
+   },
+   "msgtype": "m.image"
+  }
+ },
+ {
+  "type": "m.room.message",
+  "sender": "@gmessages_1.9:localhost",
+  "event_id": "$gif1",
+  "origin_server_ts": 4000,
+  "content": {
+   "com.beeper.disappearing_timer": {},
+   "fi.mau.gmessages.raw_debug_data": "GgQSAggB",
+   "m.mentions": {},
+   "body": "",
+   "file": {
+    "v": "v2",
+    "url": "mxc://localhost/gif1",
+    "key": {
+     "alg": "A256CTR",
+     "ext": true,
+     "k": "qcHVMSgYg-71CauWBezXI5qkaRb0LuIy-Wx5kIaHMIA",
+     "key_ops": [
+      "encrypt",
+      "decrypt"
+     ],
+     "kty": "oct"
+    },
+    "iv": "X85+XgHN+HEAAAAAAAAAAA",
+    "hashes": {
+     "sha256": "5qG4fFnbbVdlAB1Q72JDKwCagV6Dbkx9uds4rSak37c"
+    }
+   },
+   "filename": "funny.gif",
+   "info": {
+    "mimetype": "image/gif",
+    "size": 326315
+   },
+   "msgtype": "m.image"
+  }
+ },
+ {
+  "type": "m.room.message",
+  "sender": "@slack_u15:localhost",
+  "event_id": "$heic1",
+  "origin_server_ts": 4500,
+  "content": {
+   "body": "look at this",
+   "com.beeper.disappearing_timer": {},
+   "com.beeper.linkpreviews": [],
+   "file": {
+    "v": "v2",
+    "url": "mxc://localhost/realheic",
+    "key": {
+     "alg": "A256CTR",
+     "ext": true,
+     "k": "qcHVMSgYg-71CauWBezXI5qkaRb0LuIy-Wx5kIaHMIA",
+     "key_ops": [
+      "encrypt",
+      "decrypt"
+     ],
+     "kty": "oct"
+    },
+    "iv": "X85+XgHN+HEAAAAAAAAAAA",
+    "hashes": {
+     "sha256": "5qG4fFnbbVdlAB1Q72JDKwCagV6Dbkx9uds4rSak37c"
+    }
+   },
+   "filename": "IMG_0001.heic",
+   "info": {
+    "h": 5712,
+    "mimetype": "image/heic",
+    "size": 2787600,
+    "w": 4284
+   },
+   "m.mentions": {},
+   "msgtype": "m.image"
+  }
+ },
+ {
+  "type": "m.room.message",
+  "sender": "@devon:localhost",
+  "event_id": "$vid1",
+  "origin_server_ts": 5000,
+  "content": {
+   "com.beeper.disappearing_timer": {},
+   "fi.mau.gmessages.raw_debug_data": "GgQSAggB",
+   "m.mentions": {},
+   "body": "clip.mp4",
+   "file": {
+    "v": "v2",
+    "url": "mxc://localhost/vid1",
+    "key": {
+     "alg": "A256CTR",
+     "ext": true,
+     "k": "qcHVMSgYg-71CauWBezXI5qkaRb0LuIy-Wx5kIaHMIA",
+     "key_ops": [
+      "encrypt",
+      "decrypt"
+     ],
+     "kty": "oct"
+    },
+    "iv": "X85+XgHN+HEAAAAAAAAAAA",
+    "hashes": {
+     "sha256": "5qG4fFnbbVdlAB1Q72JDKwCagV6Dbkx9uds4rSak37c"
+    }
+   },
+   "info": {
+    "mimetype": "video/mp4",
+    "size": 16205603
+   },
+   "msgtype": "m.video"
+  }
+ },
+ {
+  "type": "m.room.message",
+  "sender": "@devon:localhost",
+  "event_id": "$pdf1",
+  "origin_server_ts": 5500,
+  "content": {
+   "com.beeper.disappearing_timer": {},
+   "fi.mau.gmessages.raw_debug_data": "GgQSAggB",
+   "m.mentions": {},
+   "body": "menu.pdf",
+   "file": {
+    "v": "v2",
+    "url": "mxc://localhost/pdf1",
+    "key": {
+     "alg": "A256CTR",
+     "ext": true,
+     "k": "qcHVMSgYg-71CauWBezXI5qkaRb0LuIy-Wx5kIaHMIA",
+     "key_ops": [
+      "encrypt",
+      "decrypt"
+     ],
+     "kty": "oct"
+    },
+    "iv": "X85+XgHN+HEAAAAAAAAAAA",
+    "hashes": {
+     "sha256": "5qG4fFnbbVdlAB1Q72JDKwCagV6Dbkx9uds4rSak37c"
+    }
+   },
+   "info": {
+    "mimetype": "application/pdf",
+    "size": 43459
+   },
+   "msgtype": "m.file"
+  }
+ },
+ {
+  "type": "m.reaction",
+  "sender": "@gmessages_1.9:localhost",
+  "event_id": "$r1",
+  "origin_server_ts": 6000,
+  "content": {
+   "m.relates_to": {
+    "event_id": "$t1",
+    "key": "👍️",
+    "rel_type": "m.annotation"
+   }
+  }
+ },
+ {
+  "type": "m.reaction",
+  "sender": "@devon:localhost",
+  "event_id": "$r2",
+  "origin_server_ts": 6100,
+  "content": {
+   "fi.mau.double_puppet_source": "mautrix-gmessages",
+   "m.relates_to": {
+    "event_id": "$t1",
+    "key": "👍",
+    "rel_type": "m.annotation"
+   },
+   "org.matrix.msc2716.historical": true
+  }
+ },
+ {
+  "type": "m.room.message",
+  "sender": "@gmessages_1.14:localhost",
+  "event_id": "$tb1",
+  "origin_server_ts": 7000,
+  "content": {
+   "com.beeper.disappearing_timer": {},
+   "fi.mau.gmessages.raw_debug_data": "GgQSAggB",
+   "m.mentions": {},
+   "body": "Laughed at an image",
+   "msgtype": "m.text"
+  }
+ },
+ {
+  "type": "m.room.message",
+  "sender": "@gmessages_1.14:localhost",
+  "event_id": "$tb2",
+  "origin_server_ts": 7100,
+  "content": {
+   "com.beeper.disappearing_timer": {},
+   "fi.mau.gmessages.raw_debug_data": "GgQSAggB",
+   "m.mentions": {},
+   "body": "Loved “Dinner at 7 on Sunday?”",
+   "msgtype": "m.text"
+  }
+ },
+ {
+  "type": "m.room.message",
+  "sender": "@gmessages_1.9:localhost",
+  "event_id": "$tb3",
+  "origin_server_ts": 7200,
+  "content": {
+   "com.beeper.disappearing_timer": {},
+   "fi.mau.gmessages.raw_debug_data": "GgQSAggB",
+   "m.mentions": {},
+   "body": "​👍​ to “Dinner at 7 on Sunday?”",
+   "msgtype": "m.text"
+  }
+ },
+ {
+  "type": "m.room.message",
+  "sender": "@gmessages_1.9:localhost",
+  "event_id": "$tb4",
+  "origin_server_ts": 7300,
+  "content": {
+   "com.beeper.disappearing_timer": {},
+   "fi.mau.gmessages.raw_debug_data": "GgQSAggB",
+   "m.mentions": {},
+   "body": "Emphasized “a message we don't have anymore”",
+   "msgtype": "m.text"
+  }
+ },
+ {
+  "type": "m.room.message",
+  "sender": "@gmessages_1.14:localhost",
+  "event_id": "$tb5",
+  "origin_server_ts": 7400,
+  "content": {
+   "com.beeper.disappearing_timer": {},
+   "fi.mau.gmessages.raw_debug_data": "GgQSAggB",
+   "m.mentions": {},
+   "body": "Reacted 📚 to “Dinner at 7 on Sunday?”",
+   "msgtype": "m.text"
+  }
+ },
+ {
+  "type": "m.room.message",
+  "sender": "@gmessages_1.14:localhost",
+  "event_id": "$t2",
+  "origin_server_ts": 8000,
+  "content": {
+   "com.beeper.disappearing_timer": {},
+   "fi.mau.gmessages.raw_debug_data": "GgQSAggB",
+   "m.mentions": {},
+   "body": "Loved the movie last night",
+   "msgtype": "m.text"
+  }
+ }
+]

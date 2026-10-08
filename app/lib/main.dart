@@ -16,6 +16,9 @@ import 'src/ui/theme.dart';
 
 const _demoDefine = bool.fromEnvironment('CROSSCHAT_DEMO');
 
+// ignore: unused_element
+AppLifecycleListener? _lifecycle;
+
 /// Demo mode: sample data, no homeserver. `--dart-define=CROSSCHAT_DEMO=true`
 /// at build time or `CROSSCHAT_DEMO=1` in the environment (desktop).
 bool get _demo => _demoDefine || (!kIsWeb && Platform.environment['CROSSCHAT_DEMO'] == '1');
@@ -23,6 +26,8 @@ bool get _demo => _demoDefine || (!kIsWeb && Platform.environment['CROSSCHAT_DEM
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   final state = await createAppState();
+  // Only mark incoming messages read while the window is focused.
+  _lifecycle = AppLifecycleListener(onStateChange: (s) => state.setAppFocused(s == AppLifecycleState.resumed));
   runApp(CrosschatApp(state: state));
   await state.init();
 }
@@ -66,10 +71,7 @@ class CrosschatApp extends StatelessWidget {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   const CircularProgressIndicator(),
-                  if (state.localStatus != null) ...[
-                    const SizedBox(height: 16),
-                    Text(state.localStatus!.detail, key: const Key('init-progress')),
-                  ],
+                  if (state.localStatus != null) ...[const SizedBox(height: 16), Text(state.localStatus!.detail, key: const Key('init-progress'))],
                 ],
               ),
             ),

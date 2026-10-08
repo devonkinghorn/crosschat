@@ -8,7 +8,9 @@ import '../daemon/daemon_client.dart';
 import '../local/local_server.dart';
 import '../models.dart';
 import '../platform.dart';
+import '../ui/media_cache.dart';
 import 'network_groups.dart';
+import 'timeline_fold.dart';
 import 'settings.dart';
 
 /// Single source of UI state. Plain ChangeNotifier; the Rust core owns the
@@ -26,7 +28,11 @@ class AppState extends ChangeNotifier {
   }) : settings = settings ?? AppSettings(),
        capabilities = capabilities ?? PlatformCapabilities.current(),
        clock = clock ?? DateTime.now,
-       syncTracker = syncTracker ?? SyncTracker();
+       syncTracker = syncTracker ?? SyncTracker() {
+    MediaCache.instance
+      ..clear()
+      ..backend = backend;
+  }
 
   /// How often bridge accounts are checked while something is syncing (idle:
   /// every [_idleAccountsPoll]). `null` = no timer (tests drive it).
@@ -100,6 +106,33 @@ class AppState extends ChangeNotifier {
 
   StreamSubscription<BackendUpdate>? _sub;
   Timer? _refreshDebounce;
+  Timer? _timelineDebounce;
+
+  // ---- Read state ----------------------------------------------------------
+  // The server's unread counts only change on the next sync after a receipt,
+  // so marking read/unread is applied locally right away and reconciled with
+  // what the server reports (see [_applyReadState]).
+
+  /// Window focused / app in the foreground. New messages in the open chat
+  /// are only marked read while this is true.
+  bool appFocused = true;
+
+  /// The chat the user opened (clicked). Automatic selection at startup
+  /// doesn't count, so launching the app never marks a chat read by itself.
+  String? _readingRoomId;
+
+  /// Set when the user marks the open chat unread: stop auto-marking it read
+  /// until they open a chat again.
+  String? _autoReadPaused;
+
+  /// roomId -> lastTs of the room when we marked it read locally.
+  final Map<String, int> _readLocally = {};
+
+  /// roomId -> marked-unread value we set that sync hasn't confirmed yet.
+  final Map<String, bool> _markedLocally = {};
+
+  Timer? _markReadDebounce;
+  String? _pendingReadEvent;
 
   Room? get selectedRoom => rooms.where((r) => r.roomId == selectedRoomId).firstOrNull;
 
@@ -110,12 +143,39 @@ class AppState extends ChangeNotifier {
 
   List<Room> get visibleRooms => networkFilter == null ? rooms : rooms.where((r) => r.groupKey == networkFilter).toList();
 
-  int unreadFor(String key) => rooms.where((r) => r.groupKey == key).fold(0, (a, r) => a + r.unread);
+  int unreadFor(String key) => rooms.where((r) => r.groupKey == key).fold(0, (a, r) => a + r.badgeCount);
+
+  /// The raw rooms with local read/unread actions applied until the server
+  /// reflects them: a chat marked read shows no badge until something newer
+  /// than what we read arrives; a marked-unread flag shows until sync echoes it.
+  List<Room> _applyReadState(List<Room> raw) => [for (final r in raw) _withReadState(r)];
+
+  Room _withReadState(Room r) {
+    var room = r;
+    final marked = _markedLocally[r.roomId];
+    if (marked != null) {
+      if (r.markedUnread == marked) {
+        _markedLocally.remove(r.roomId);
+      } else {
+        room = room.copyWith(markedUnread: marked);
+      }
+    }
+    final readAt = _readLocally[r.roomId];
+    if (readAt != null) {
+      if (r.lastTs > readAt || (r.unread == 0 && !r.markedUnread && marked == null)) {
+        // Newer activity (trust the server's count again), or the server caught up.
+        _readLocally.remove(r.roomId);
+      } else {
+        room = room.copyWith(unread: 0, markedUnread: _markedLocally[r.roomId] ?? false);
+      }
+    }
+    return room;
+  }
 
   /// Rebuild rooms + rail entries from the raw room list and bridge accounts.
   void _recompute() {
     final view = resolveNetworks(
-      _rawRooms,
+      _applyReadState(_rawRooms),
       bridges: bridges,
       accounts: accounts,
       pendingBridges: _pendingLogins.keys.toSet(),
@@ -304,7 +364,7 @@ class AppState extends ChangeNotifier {
     _sub = backend.updates().listen(_onUpdate);
     await refreshRooms();
     if (selectedRoomId == null && rooms.isNotEmpty) {
-      await selectRoom(rooms.first.roomId);
+      await selectRoom(rooms.first.roomId, userInitiated: false);
     }
     if (settings.persistentSync && capabilities.hasPersistentSyncService) {
       await PersistentSyncService.setEnabled(true);
@@ -343,7 +403,7 @@ class AppState extends ChangeNotifier {
         final m = u.message!;
         if (u.roomId == selectedRoomId) {
           if (m.threadRoot == null) {
-            if (!messages.any((x) => x.eventId == m.eventId)) messages = [...messages, m];
+            if (!messages.any((x) => x.eventId == m.eventId)) messages = foldTapbacks([...messages, m]);
           } else {
             _bumpThreadSummary(m);
             if (m.threadRoot == openThreadRoot && !threadMessages.any((x) => x.eventId == m.eventId)) {
@@ -351,7 +411,10 @@ class AppState extends ChangeNotifier {
             }
           }
         }
+        if (u.roomId == selectedRoomId && !m.isOwn) _noteSeen(u.roomId!, m);
         _scheduleRoomRefresh();
+      case 'timeline_changed':
+        if (u.roomId == selectedRoomId) _scheduleTimelineReload();
       case 'sync_state':
         syncState = u.state ?? '';
       default:
@@ -364,15 +427,7 @@ class AppState extends ChangeNotifier {
     messages = [
       for (final m in messages)
         if (m.eventId == reply.threadRoot)
-          Message(
-            eventId: m.eventId,
-            sender: m.sender,
-            senderName: m.senderName,
-            body: m.body,
-            kind: m.kind,
-            ts: m.ts,
-            isOwn: m.isOwn,
-            edited: m.edited,
+          m.copyWith(
             thread: ThreadSummary(
               replyCount: (m.thread?.replyCount ?? 0) + 1,
               latestReplyTs: reply.ts,
@@ -383,6 +438,92 @@ class AppState extends ChangeNotifier {
         else
           m,
     ];
+  }
+
+  /// A message arrived in the open chat: mark it read if the user is looking.
+  void _noteSeen(String roomId, Message m) {
+    if (!_canAutoRead(roomId)) return;
+    _readLocally[roomId] = m.ts > (_readLocally[roomId] ?? 0) ? m.ts : _readLocally[roomId]!;
+    _pendingReadEvent = m.eventId;
+    _markReadDebounce?.cancel();
+    _markReadDebounce = Timer(const Duration(milliseconds: 500), () {
+      final ev = _pendingReadEvent;
+      _pendingReadEvent = null;
+      if (selectedRoomId == roomId) unawaited(_sendRead(roomId, eventId: ev));
+    });
+  }
+
+  bool _canAutoRead(String roomId) => appFocused && _readingRoomId == roomId && _autoReadPaused != roomId;
+
+  /// Window focus / app lifecycle changed.
+  void setAppFocused(bool focused) {
+    if (appFocused == focused) return;
+    appFocused = focused;
+    final id = selectedRoomId;
+    if (focused && id != null && _canAutoRead(id) && (selectedRoom?.isUnread ?? false)) {
+      unawaited(markRead(id));
+    }
+  }
+
+  /// Mark a chat read now (clears its badge immediately) and tell the server
+  /// (read receipt + fully-read marker on the latest message).
+  Future<void> markRead(String roomId, {String? eventId}) async {
+    final room = rooms.where((r) => r.roomId == roomId).firstOrNull ?? _rawRooms.where((r) => r.roomId == roomId).firstOrNull;
+    _readLocally[roomId] = room?.lastTs ?? 0;
+    if (room?.markedUnread ?? false) _markedLocally[roomId] = false;
+    _recompute();
+    notifyListeners();
+    await _sendRead(roomId, eventId: eventId);
+  }
+
+  Future<void> _sendRead(String roomId, {String? eventId}) async {
+    try {
+      await backend.markRead(roomId, eventId: eventId);
+    } catch (e) {
+      _readLocally.remove(roomId);
+      _markedLocally.remove(roomId);
+      error = 'Could not mark as read: $e';
+      _recompute();
+      notifyListeners();
+    }
+  }
+
+  /// Mark a chat unread (MSC2867). Marking the open chat unread keeps it
+  /// unread until the user opens a chat again.
+  Future<void> markUnread(String roomId) async {
+    _readLocally.remove(roomId);
+    _markedLocally[roomId] = true;
+    if (roomId == selectedRoomId) _autoReadPaused = roomId;
+    _recompute();
+    notifyListeners();
+    try {
+      await backend.setMarkedUnread(roomId, true);
+    } catch (e) {
+      _markedLocally.remove(roomId);
+      error = 'Could not mark as unread: $e';
+      _recompute();
+      notifyListeners();
+    }
+  }
+
+  void _scheduleTimelineReload() {
+    _timelineDebounce?.cancel();
+    _timelineDebounce = Timer(const Duration(milliseconds: 300), reloadTimeline);
+  }
+
+  /// Re-fetch the open chat's timeline (reactions, edits, names changed).
+  Future<void> reloadTimeline() async {
+    final roomId = selectedRoomId;
+    if (roomId == null) return;
+    try {
+      final fresh = foldTapbacks(await backend.timeline(roomId));
+      if (selectedRoomId != roomId) return;
+      // Keep live messages newer than the fetched page.
+      final lastTs = fresh.isEmpty ? 0 : fresh.last.ts;
+      final ids = fresh.map((m) => m.eventId).toSet();
+      messages = foldTapbacks([...fresh, ...messages.where((m) => m.ts > lastTs && !ids.contains(m.eventId))]);
+      notifyListeners();
+    } catch (_) {}
   }
 
   void _scheduleRoomRefresh() {
@@ -400,7 +541,7 @@ class AppState extends ChangeNotifier {
     notifyListeners();
     // Fresh logins start with an empty store; pick a room once sync fills it.
     if (selectedRoomId == null && rooms.isNotEmpty) {
-      await selectRoom(rooms.first.roomId);
+      await selectRoom(rooms.first.roomId, userInitiated: false);
     }
   }
 
@@ -409,14 +550,28 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> selectRoom(String roomId) async {
+  /// Open a chat. [userInitiated] (a click/tap) also marks it read; the
+  /// automatic selection at startup doesn't.
+  Future<void> selectRoom(String roomId, {bool userInitiated = true}) async {
     selectedRoomId = roomId;
     openThreadRoot = null;
     threadMessages = [];
     loadingMessages = true;
+    _markReadDebounce?.cancel();
+    _pendingReadEvent = null;
+    if (userInitiated) {
+      _readingRoomId = roomId;
+      _autoReadPaused = null;
+      final room = rooms.where((r) => r.roomId == roomId).firstOrNull;
+      if (appFocused && room != null && room.isUnread) {
+        unawaited(markRead(roomId));
+      }
+    } else if (_readingRoomId != roomId) {
+      _readingRoomId = null;
+    }
     notifyListeners();
     try {
-      messages = await backend.timeline(roomId);
+      messages = foldTapbacks(await backend.timeline(roomId));
     } catch (e) {
       messages = [];
       error = 'Timeline failed: $e';
@@ -513,6 +668,11 @@ class AppState extends ChangeNotifier {
     rooms = [];
     messages = [];
     selectedRoomId = null;
+    _readingRoomId = null;
+    _autoReadPaused = null;
+    _readLocally.clear();
+    _markedLocally.clear();
+    MediaCache.instance.clear();
     openThreadRoot = null;
     daemon = null;
     daemonAvailable = false;
@@ -524,6 +684,8 @@ class AppState extends ChangeNotifier {
   void dispose() {
     _sub?.cancel();
     _refreshDebounce?.cancel();
+    _timelineDebounce?.cancel();
+    _markReadDebounce?.cancel();
     _accountsTimer?.cancel();
     super.dispose();
   }

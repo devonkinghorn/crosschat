@@ -1,19 +1,15 @@
 import 'package:flutter/material.dart';
 
 import '../models.dart';
+import '../state/timeline_fold.dart';
+import 'media_view.dart';
 import 'theme.dart';
 import 'widgets.dart';
 
 /// Dense, Slack-style message list. Consecutive messages from the same
 /// sender within 5 minutes collapse their header.
 class MessageList extends StatefulWidget {
-  const MessageList({
-    super.key,
-    required this.messages,
-    this.onOpenThread,
-    this.canThread = true,
-    this.padding = const EdgeInsets.only(bottom: 12),
-  });
+  const MessageList({super.key, required this.messages, this.onOpenThread, this.canThread = true, this.padding = const EdgeInsets.only(bottom: 12)});
 
   final List<Message> messages;
   final void Function(Message root)? onOpenThread;
@@ -37,14 +33,8 @@ class _MessageListState extends State<MessageList> {
         final idx = msgs.length - 1 - i;
         final m = msgs[idx];
         final prev = idx > 0 ? msgs[idx - 1] : null;
-        final newDay = prev == null ||
-            prev.time.day != m.time.day ||
-            prev.time.month != m.time.month ||
-            prev.time.year != m.time.year;
-        final grouped = !newDay &&
-            prev.sender == m.sender &&
-            m.time.difference(prev.time).inMinutes < 5 &&
-            prev.thread == null;
+        final newDay = prev == null || prev.time.day != m.time.day || prev.time.month != m.time.month || prev.time.year != m.time.year;
+        final grouped = !newDay && prev.sender == m.sender && m.time.difference(prev.time).inMinutes < 5 && prev.thread == null;
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -73,7 +63,10 @@ class _DayDivider extends StatelessWidget {
         const Expanded(child: Divider(color: CC.divider)),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 8),
-          child: Text(label, style: const TextStyle(color: CC.textMuted, fontSize: 12, fontWeight: FontWeight.w600)),
+          child: Text(
+            label,
+            style: const TextStyle(color: CC.textMuted, fontSize: 12, fontWeight: FontWeight.w600),
+          ),
         ),
         const Expanded(child: Divider(color: CC.divider)),
       ],
@@ -98,20 +91,22 @@ class _MessageTileState extends State<MessageTile> {
   @override
   Widget build(BuildContext context) {
     final m = widget.message;
+    final tap = m.tapback;
+    if (tap != null) return _TapbackLine(message: m, tapback: tap);
     final muted = m.kind == 'redacted' || m.kind == 'undecryptable' || m.kind == 'notice';
+    final hasText = m.body.isNotEmpty || m.media == null;
     final body = Text.rich(
       TextSpan(
         children: [
           TextSpan(
             text: m.kind == 'emote' ? '* ${m.senderName} ${m.body}' : m.body,
-            style: TextStyle(
-              color: muted ? CC.textMuted : CC.text,
-              fontStyle: muted ? FontStyle.italic : FontStyle.normal,
-              fontSize: 15,
-              height: 1.35,
-            ),
+            style: TextStyle(color: muted ? CC.textMuted : CC.text, fontStyle: muted ? FontStyle.italic : FontStyle.normal, fontSize: 15, height: 1.35),
           ),
-          if (m.edited) const TextSpan(text: '  (edited)', style: TextStyle(color: CC.textFaint, fontSize: 11)),
+          if (m.edited)
+            const TextSpan(
+              text: '  (edited)',
+              style: TextStyle(color: CC.textFaint, fontSize: 11),
+            ),
         ],
       ),
     );
@@ -135,7 +130,7 @@ class _MessageTileState extends State<MessageTile> {
                                 child: Text(formatTime(m.time).replaceAll(' ', '\n'), style: const TextStyle(color: CC.textFaint, fontSize: 9)),
                               )
                             : null)
-                      : Avatar(name: m.senderName, seed: m.sender),
+                      : Avatar(name: m.senderName, seed: m.sender, mxc: m.senderAvatar),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
@@ -158,9 +153,10 @@ class _MessageTileState extends State<MessageTile> {
                             Text(formatTime(m.time), style: const TextStyle(color: CC.textFaint, fontSize: 11.5)),
                           ],
                         ),
-                      body,
-                      if (widget.canThread && m.thread != null && m.thread!.replyCount > 0)
-                        ThreadSummaryRow(summary: m.thread!, onTap: widget.onOpenThread),
+                      if (hasText) body,
+                      if (m.media != null) MediaView(message: m),
+                      if (m.reactions.isNotEmpty) ReactionRow(message: m),
+                      if (widget.canThread && m.thread != null && m.thread!.replyCount > 0) ThreadSummaryRow(summary: m.thread!, onTap: widget.onOpenThread),
                     ],
                   ),
                 ),
@@ -188,6 +184,69 @@ class _MessageTileState extends State<MessageTile> {
       ),
     );
   }
+}
+
+/// An SMS/RCS tapback whose message isn't loaded: a compact muted line
+/// ("Alex reacted ❤️ to “see you”") instead of a full message.
+class _TapbackLine extends StatelessWidget {
+  const _TapbackLine({required this.message, required this.tapback});
+  final Message message;
+  final TapbackInfo tapback;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    key: Key('tapback-line-${message.eventId}'),
+    padding: const EdgeInsets.fromLTRB(68, 2, 16, 2),
+    child: Text.rich(
+      TextSpan(
+        children: [
+          TextSpan(
+            text: message.isOwn ? 'You' : message.senderName,
+            style: const TextStyle(fontWeight: FontWeight.w600),
+          ),
+          TextSpan(text: ' ${tapbackLine(tapback)}'),
+          TextSpan(
+            text: '  ${formatTime(message.time)}',
+            style: const TextStyle(color: CC.textFaint, fontSize: 11),
+          ),
+        ],
+      ),
+      maxLines: 2,
+      overflow: TextOverflow.ellipsis,
+      style: const TextStyle(color: CC.textMuted, fontSize: 13, fontStyle: FontStyle.italic),
+    ),
+  );
+}
+
+/// Reaction chips under a message ("👍 2").
+class ReactionRow extends StatelessWidget {
+  const ReactionRow({super.key, required this.message});
+  final Message message;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.only(top: 4),
+    child: Wrap(
+      spacing: 4,
+      runSpacing: 4,
+      children: [
+        for (final r in message.reactions)
+          Tooltip(
+            message: '${r.count} ${r.count == 1 ? 'reaction' : 'reactions'}${r.own ? ' (including you)' : ''}',
+            child: Container(
+              key: Key('reaction-${message.eventId}-${r.key}'),
+              padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+              decoration: BoxDecoration(
+                color: r.own ? CC.accent.withValues(alpha: 0.22) : CC.input,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: r.own ? CC.accent : Colors.transparent),
+              ),
+              child: Text('${r.key} ${r.count}', style: const TextStyle(fontSize: 12.5)),
+            ),
+          ),
+      ],
+    ),
+  );
 }
 
 /// "▣▣ 3 replies   Last reply 2h ago" under a thread root.

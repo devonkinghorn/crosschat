@@ -7,6 +7,7 @@
 //! * Session tokens are persisted to `<data_dir>/session.json` with 0600
 //!   permissions. Moving them into the OS keychain is tracked in the roadmap.
 
+use crate::content;
 use crate::model::{
     self, CoreEvent, Message, NetworkInfo, RoomSummary, UserResult, build_main_timeline,
     parse_bridge_state, parse_event, threads_supported_from_features,
@@ -17,16 +18,25 @@ use matrix_sdk::{
     authentication::matrix::MatrixSession,
     config::SyncSettings,
     deserialized_responses::RawAnySyncOrStrippedState,
+    media::{MediaFormat, MediaRequestParameters, MediaThumbnailSettings},
     room::{IncludeRelations, MessagesOptions, RelationsOptions},
     ruma::{
-        EventId, OwnedEventId, RoomId, UInt, UserId,
-        api::{Direction, client::room::create_room},
-        events::{
-            StateEventType,
-            relation::{RelationType, Thread},
-            room::message::{Relation, RoomMessageEventContent},
+        EventId, OwnedEventId, OwnedMxcUri, RoomId, UInt, UserId,
+        api::{
+            Direction,
+            client::{read_marker::set_read_marker, room::create_room},
         },
+        events::{
+            AnyRoomAccountDataEventContent, RoomAccountDataEventType, StateEventType,
+            receipt::{ReceiptThread, ReceiptType},
+            relation::{RelationType, Thread},
+            room::{
+                MediaSource, message::{Relation, RoomMessageEventContent},
+            },
+        },
+        serde::Raw,
     },
+    sync::State,
     store::RoomLoadSettings,
 };
 use serde::{Deserialize, Serialize};
@@ -52,6 +62,9 @@ struct LastMessage {
     body: String,
 }
 
+/// (display name, avatar mxc) as fetched from the profile API.
+type ProfileEntry = (Option<String>, Option<String>);
+
 /// Cheaply clonable handle to a logged-in Matrix account.
 #[derive(Clone)]
 pub struct CrosschatClient {
@@ -60,6 +73,20 @@ pub struct CrosschatClient {
     events: broadcast::Sender<CoreEvent>,
     last: Arc<Mutex<HashMap<String, LastMessage>>>,
     sync_task: Arc<Mutex<Option<JoinHandle<()>>>>,
+    /// Global profiles of senders that have no room member info.
+    profiles: Arc<Mutex<HashMap<String, Option<ProfileEntry>>>>,
+    /// Last read receipt we sent per room (Tuwunel re-emits repeated
+    /// receipts to bridges, so never send the same one twice).
+    receipts: Arc<Mutex<HashMap<String, String>>>,
+    /// Marked-unread flags we wrote that sync hasn't echoed yet.
+    marked: Arc<Mutex<HashMap<String, bool>>>,
+}
+
+/// `(display name, avatar mxc)` of a sender as shown in a room.
+#[derive(Clone, Default)]
+struct SenderProfile {
+    name: String,
+    avatar: Option<String>,
 }
 
 fn session_path(data_dir: &Path) -> PathBuf {
@@ -100,6 +127,9 @@ impl CrosschatClient {
             events,
             last: Default::default(),
             sync_task: Default::default(),
+            profiles: Default::default(),
+            receipts: Default::default(),
+            marked: Default::default(),
         }
     }
 
@@ -184,23 +214,42 @@ impl CrosschatClient {
         self.events.subscribe()
     }
 
-    fn record_sync(&self, response: &matrix_sdk::sync::SyncResponse) {
+    async fn record_sync(&self, response: &matrix_sdk::sync::SyncResponse) {
         let own = self.user_id();
         let mut changed = !response.rooms.joined.is_empty()
             || !response.rooms.invited.is_empty()
             || !response.rooms.left.is_empty();
         for (room_id, update) in &response.rooms.joined {
+            let room = self.client.get_room(room_id);
+            let mut cache: HashMap<String, SenderProfile> = HashMap::new();
+            // Reactions, edits, redactions and member changes alter messages
+            // that may already be on screen.
+            let mut timeline_changed = !update.ambiguity_changes.is_empty()
+                || state_has_member(&update.state);
             for ev in &update.timeline.events {
                 let Some(json) = raw_json(ev.raw()) else {
                     continue;
                 };
-                if let Some(msg) = parse_event(&json, &own) {
+                let ty = json.get("type").and_then(Value::as_str).unwrap_or("");
+                let is_edit = json
+                    .pointer("/content/m.relates_to/rel_type")
+                    .and_then(Value::as_str)
+                    == Some("m.replace");
+                if matches!(ty, "m.reaction" | "m.room.redaction" | "m.room.member") || is_edit {
+                    timeline_changed = true;
+                }
+                if let Some(mut msg) = parse_event(&json, &own) {
+                    if let Some(room) = &room {
+                        let p = self.sender_profile(room, &msg.sender, &mut cache).await;
+                        msg.sender_name = p.name;
+                        msg.sender_avatar = p.avatar;
+                    }
                     if msg.thread_root.is_none() {
                         self.last.lock().unwrap().insert(
                             room_id.to_string(),
                             LastMessage {
                                 ts: msg.ts,
-                                body: msg.body.clone(),
+                                body: content::preview(&msg),
                             },
                         );
                     }
@@ -210,6 +259,15 @@ impl CrosschatClient {
                     });
                     changed = true;
                 }
+            }
+            if timeline_changed {
+                let _ = self.events.send(CoreEvent::TimelineChanged {
+                    room_id: room_id.to_string(),
+                });
+            }
+            // Our marked-unread writes are echoed back as account data.
+            if !update.account_data.is_empty() {
+                self.marked.lock().unwrap().remove(room_id.as_str());
             }
         }
         if changed {
@@ -221,7 +279,7 @@ impl CrosschatClient {
     pub async fn sync_once(&self) -> Result<()> {
         let settings = SyncSettings::default().timeout(Duration::from_secs(0));
         let response = self.client.sync_once(settings).await?;
-        self.record_sync(&response);
+        self.record_sync(&response).await;
         Ok(())
     }
 
@@ -239,7 +297,7 @@ impl CrosschatClient {
             loop {
                 let settings = SyncSettings::default().timeout(Duration::from_secs(30));
                 match this.client.sync_once(settings).await {
-                    Ok(response) => this.record_sync(&response),
+                    Ok(response) => this.record_sync(&response).await,
                     Err(e) => {
                         warn!("sync error: {e}");
                         let _ = this.events.send(CoreEvent::SyncState {
@@ -340,6 +398,16 @@ impl CrosschatClient {
                 .await
                 .as_ref()
                 .and_then(threads_supported_from_features);
+            let local_mark = self.marked.lock().unwrap().get(&room_id).copied();
+            let marked_unread = match local_mark {
+                Some(v) => v,
+                None => content::marked_unread(
+                    Self::account_data_content(&room, "m.marked_unread").await.as_ref(),
+                    Self::account_data_content(&room, "com.famedly.marked_unread")
+                        .await
+                        .as_ref(),
+                ),
+            };
             out.push(RoomSummary {
                 name,
                 topic: room.topic(),
@@ -350,6 +418,7 @@ impl CrosschatClient {
                 last_message: last.map(|l| l.body),
                 network: Self::network_of(&room).await,
                 threads_supported,
+                marked_unread,
                 room_id,
             });
         }
@@ -357,32 +426,74 @@ impl CrosschatClient {
         Ok(out)
     }
 
-    async fn fill_sender_names(room: &Room, msgs: &mut [Message]) {
-        let mut cache: HashMap<String, String> = HashMap::new();
+    /// Display name and avatar of a sender in a room: the member's room
+    /// display name (disambiguated), else their global profile, else a
+    /// readable fallback. Never a raw MXID.
+    async fn sender_profile(
+        &self,
+        room: &Room,
+        sender: &str,
+        cache: &mut HashMap<String, SenderProfile>,
+    ) -> SenderProfile {
+        if let Some(p) = cache.get(sender) {
+            return p.clone();
+        }
+        let Ok(uid) = <&UserId>::try_from(sender) else {
+            return SenderProfile {
+                name: content::fallback_name(sender),
+                avatar: None,
+            };
+        };
+        let member = room.get_member_no_sync(uid).await.ok().flatten();
+        let (mut name, mut avatar, ambiguous) = match &member {
+            Some(m) => (
+                m.display_name().map(str::to_owned),
+                m.avatar_url().map(|u| u.to_string()),
+                m.name_ambiguous(),
+            ),
+            None => (None, None, false),
+        };
+        if name.is_none() {
+            let known = self.profiles.lock().unwrap().get(sender).cloned();
+            let profile = match known {
+                Some(p) => p,
+                None => {
+                    let fetched = self
+                        .client
+                        .account()
+                        .fetch_user_profile_of(uid)
+                        .await
+                        .ok()
+                        .map(|p| {
+                            let field = |k: &str| p.get(k).and_then(Value::as_str).map(str::to_owned);
+                            (field("displayname"), field("avatar_url"))
+                        });
+                    self.profiles
+                        .lock()
+                        .unwrap()
+                        .insert(sender.to_owned(), fetched.clone());
+                    fetched
+                }
+            };
+            if let Some((n, a)) = profile {
+                name = n;
+                avatar = avatar.or(a);
+            }
+        }
+        let p = SenderProfile {
+            name: content::display_name_for(sender, name.as_deref(), ambiguous),
+            avatar,
+        };
+        cache.insert(sender.to_owned(), p.clone());
+        p
+    }
+
+    async fn fill_sender_names(&self, room: &Room, msgs: &mut [Message]) {
+        let mut cache: HashMap<String, SenderProfile> = HashMap::new();
         for m in msgs.iter_mut() {
-            if let Some(n) = cache.get(&m.sender) {
-                m.sender_name = n.clone();
-                continue;
-            }
-            let name = match <&UserId>::try_from(m.sender.as_str()) {
-                Ok(uid) => room
-                    .get_member_no_sync(uid)
-                    .await
-                    .ok()
-                    .flatten()
-                    .and_then(|mem| mem.display_name().map(str::to_owned)),
-                Err(_) => None,
-            }
-            .unwrap_or_else(|| {
-                m.sender
-                    .trim_start_matches('@')
-                    .split(':')
-                    .next()
-                    .unwrap_or("")
-                    .to_owned()
-            });
-            cache.insert(m.sender.clone(), name.clone());
-            m.sender_name = name;
+            let p = self.sender_profile(room, &m.sender, &mut cache).await;
+            m.sender_name = p.name;
+            m.sender_avatar = p.avatar;
         }
     }
 
@@ -400,7 +511,7 @@ impl CrosschatClient {
             .collect();
         raw.reverse(); // backward pagination returns newest first
         let mut msgs = build_main_timeline(&raw, &self.user_id());
-        Self::fill_sender_names(&room, &mut msgs).await;
+        self.fill_sender_names(&room, &mut msgs).await;
         Ok(msgs)
     }
 
@@ -430,7 +541,7 @@ impl CrosschatClient {
         }
         msgs.extend(replies.into_iter().filter(|m| m.event_id != root_id));
         msgs.sort_by_key(|m| m.ts);
-        Self::fill_sender_names(&room, &mut msgs).await;
+        self.fill_sender_names(&room, &mut msgs).await;
         Ok(msgs)
     }
 
@@ -458,6 +569,101 @@ impl CrosschatClient {
         }
         let resp = room.send(content).await?;
         Ok(resp.response.event_id.to_string())
+    }
+
+    /// Mark a room read up to `event_id` (default: its latest message):
+    /// public read receipt + `m.fully_read`, so the server clears the unread
+    /// counts and bridges mark the chat read on the remote network; also
+    /// clears a marked-unread flag. Returns the event marked, if any.
+    pub async fn mark_read(&self, room_id: &str, event_id: Option<&str>) -> Result<Option<String>> {
+        let room = self.room(room_id)?;
+        let target = match event_id {
+            Some(id) => Some(id.to_owned()),
+            None => self.latest_event_id(&room).await?,
+        };
+        if let Some(target) = &target {
+            let eid: OwnedEventId = <&EventId>::try_from(target.as_str())?.to_owned();
+            let own = self.client.user_id().ok_or_else(|| anyhow!("not logged in"))?;
+            let already = self.receipts.lock().unwrap().get(room_id) == Some(target)
+                || room
+                    .load_user_receipt(ReceiptType::Read, &ReceiptThread::Unthreaded, own)
+                    .await
+                    .ok()
+                    .flatten()
+                    .is_some_and(|(id, _)| id == eid);
+            if !already {
+                let mut req = set_read_marker::v3::Request::new(room.room_id().to_owned());
+                req.fully_read = Some(eid.clone());
+                req.read_receipt = Some(eid);
+                self.client.send(req).await?;
+                self.receipts
+                    .lock()
+                    .unwrap()
+                    .insert(room_id.to_owned(), target.clone());
+            }
+        }
+        let flagged = self.marked.lock().unwrap().get(room_id).copied();
+        if flagged.unwrap_or_else(|| room.is_marked_unread()) {
+            self.write_marked_unread(&room, false).await?;
+        }
+        Ok(target)
+    }
+
+    /// Set or clear the room's marked-unread flag (MSC2867: written as
+    /// `m.marked_unread` and the unstable `com.famedly.marked_unread`).
+    pub async fn set_marked_unread(&self, room_id: &str, unread: bool) -> Result<()> {
+        let room = self.room(room_id)?;
+        self.write_marked_unread(&room, unread).await
+    }
+
+    async fn write_marked_unread(&self, room: &Room, unread: bool) -> Result<()> {
+        let content: Raw<AnyRoomAccountDataEventContent> = Raw::from_json(
+            serde_json::value::to_raw_value(&serde_json::json!({ "unread": unread }))?,
+        );
+        for ty in ["m.marked_unread", "com.famedly.marked_unread"] {
+            room.set_account_data_raw(RoomAccountDataEventType::from(ty), content.clone())
+                .await?;
+        }
+        self.marked
+            .lock()
+            .unwrap()
+            .insert(room.room_id().to_string(), unread);
+        let _ = self.events.send(CoreEvent::RoomsChanged);
+        Ok(())
+    }
+
+    async fn latest_event_id(&self, room: &Room) -> Result<Option<String>> {
+        let mut opts = MessagesOptions::backward();
+        opts.limit = UInt::from(20u32);
+        let resp = room.messages(opts).await?;
+        let raw: Vec<Value> = resp.chunk.iter().filter_map(|e| raw_json(e.raw())).collect();
+        Ok(content::pick_read_target(&raw))
+    }
+
+    async fn account_data_content(room: &Room, ty: &str) -> Option<Value> {
+        let raw = room
+            .account_data(RoomAccountDataEventType::from(ty))
+            .await
+            .ok()??;
+        raw_json(&raw).and_then(|v| v.get("content").cloned())
+    }
+
+    /// Download an attachment (decrypting it in encrypted rooms). `source`
+    /// is [`content::MediaInfo::source`] or a bare `mxc://` URL (avatars).
+    /// With `thumbnail`, asks the server for a scaled-down version (plain
+    /// media only; encrypted media has no server-side thumbnails). Uses the
+    /// authenticated media API when the server supports it (Matrix 1.11),
+    /// the legacy one otherwise, and the SDK's media cache.
+    pub async fn media(&self, source: &str, thumbnail: Option<(u32, u32)>) -> Result<Vec<u8>> {
+        let source = parse_media_source(source)?;
+        let format = match (&source, thumbnail) {
+            (MediaSource::Plain(_), Some((w, h))) => MediaFormat::Thumbnail(
+                MediaThumbnailSettings::new(UInt::from(w), UInt::from(h)),
+            ),
+            _ => MediaFormat::File,
+        };
+        let request = MediaRequestParameters { source, format };
+        Ok(self.client.media().get_media_content(&request, true).await?)
     }
 
     /// Plain-Matrix user directory search (fallback for the new-chat dialog
@@ -516,6 +722,35 @@ impl CrosschatClient {
         let _ = std::fs::remove_dir_all(self.data_dir.join("store"));
         Ok(())
     }
+}
+
+fn state_has_member(state: &State) -> bool {
+    let events = match state {
+        State::Before(evs) | State::After(evs) => evs,
+    };
+    events.iter().any(|e| {
+        raw_json(e)
+            .and_then(|v| v.get("type").and_then(Value::as_str).map(|t| t == "m.room.member"))
+            .unwrap_or(false)
+    })
+}
+
+/// `{"url": "mxc://…"}`, `{"file": {…}}` or a bare `mxc://` URL.
+fn parse_media_source(source: &str) -> Result<MediaSource> {
+    if source.starts_with("mxc://") {
+        return Ok(MediaSource::Plain(OwnedMxcUri::from(source)));
+    }
+    let v: Value = serde_json::from_str(source).context("invalid media source")?;
+    if let Some(file) = v.get("file") {
+        return Ok(MediaSource::Encrypted(Box::new(serde_json::from_value(
+            file.clone(),
+        )?)));
+    }
+    let url = v
+        .get("url")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("media source has no url"))?;
+    Ok(MediaSource::Plain(OwnedMxcUri::from(url)))
 }
 
 /// Validate a homeserver before login: returns the supported spec versions.

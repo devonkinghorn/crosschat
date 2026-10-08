@@ -11,6 +11,67 @@ class ThreadSummary {
   final List<String> participants;
 }
 
+/// An attachment (image / video / audio / file / sticker). [source] is
+/// opaque: hand it to `ChatBackend.mediaBytes`.
+class MediaAttachment {
+  const MediaAttachment({
+    required this.source,
+    required this.filename,
+    this.mimetype,
+    this.size,
+    this.width,
+    this.height,
+    this.durationMs,
+    this.caption,
+    this.thumbnailSource,
+  });
+
+  final String source;
+  final String filename;
+  final String? mimetype;
+  final int? size;
+  final int? width;
+  final int? height;
+  final int? durationMs;
+  final String? caption;
+  final String? thumbnailSource;
+
+  String get _ext {
+    final i = filename.lastIndexOf('.');
+    return i < 0 ? '' : filename.substring(i + 1).toLowerCase();
+  }
+
+  /// HEIC/HEIF: Flutter's decoders can't read it everywhere, so it goes
+  /// through the platform's decoder (see `media_view.dart`).
+  bool get isHeic {
+    final m = (mimetype ?? '').toLowerCase();
+    return m == 'image/heic' || m == 'image/heif' || ((m.isEmpty || m == 'application/octet-stream') && (_ext == 'heic' || _ext == 'heif'));
+  }
+
+  bool get isGif => (mimetype ?? '').toLowerCase() == 'image/gif' || _ext == 'gif';
+}
+
+/// Reactions with one key on a message.
+class ReactionGroup {
+  const ReactionGroup({required this.key, required this.senders, this.own = false});
+  final String key;
+  final List<String> senders;
+  final bool own;
+  int get count => senders.length;
+}
+
+/// SMS/RCS tapback fallback ("Loved “hi”", "Laughed at an image").
+class TapbackInfo {
+  const TapbackInfo({required this.key, this.removed = false, this.targetText, this.truncated = false, this.targetKind});
+  final String key;
+  final bool removed;
+  final String? targetText;
+  final bool truncated;
+
+  /// `image`, `video`, `audio`, `file` or `any`, for "… an image".
+  final String? targetKind;
+}
+
 class Message {
   const Message({
     required this.eventId,
@@ -24,6 +85,10 @@ class Message {
     this.thread,
     this.edited = false,
     this.isOwn = false,
+    this.senderAvatar,
+    this.media,
+    this.reactions = const [],
+    this.tapback,
   });
 
   final String eventId;
@@ -38,7 +103,33 @@ class Message {
   final bool edited;
   final bool isOwn;
 
+  /// `mxc://` avatar of the sender.
+  final String? senderAvatar;
+  final MediaAttachment? media;
+  final List<ReactionGroup> reactions;
+
+  /// Set on SMS/RCS tapback fallback texts; see `foldTapbacks`.
+  final TapbackInfo? tapback;
+
   DateTime get time => DateTime.fromMillisecondsSinceEpoch(ts);
+
+  Message copyWith({List<ReactionGroup>? reactions, ThreadSummary? thread, String? senderName, String? senderAvatar}) => Message(
+    eventId: eventId,
+    sender: sender,
+    senderName: senderName ?? this.senderName,
+    body: body,
+    ts: ts,
+    kind: kind,
+    threadRoot: threadRoot,
+    inReplyTo: inReplyTo,
+    thread: thread ?? this.thread,
+    edited: edited,
+    isOwn: isOwn,
+    senderAvatar: senderAvatar ?? this.senderAvatar,
+    media: media,
+    reactions: reactions ?? this.reactions,
+    tapback: tapback,
+  );
 }
 
 class Room {
@@ -61,6 +152,7 @@ class Room {
     this.loginId,
     this.roomType,
     this.assignedGroup,
+    this.markedUnread = false,
   });
 
   final String roomId;
@@ -93,6 +185,16 @@ class Room {
   /// Rail entry assigned by `resolveNetworks` (see [groupKey]).
   final String? assignedGroup;
 
+  /// Explicitly marked unread (MSC2867).
+  final bool markedUnread;
+
+  /// Bold + badge in the sidebar: unread messages or marked unread.
+  bool get isUnread => unread > 0 || markedUnread;
+
+  /// What a chat adds to badge totals: its unread count, or 1 when it's only
+  /// marked unread.
+  int get badgeCount => unread > 0 ? unread : (markedUnread ? 1 : 0);
+
   /// Network rail entry this room is listed under (one per bridge login);
   /// defaults to the network id.
   String get groupKey => assignedGroup ?? networkId ?? 'matrix';
@@ -110,12 +212,13 @@ class Room {
     return null;
   }
 
-  Room copyWith({String? networkId, String? networkName, String? bridgeId, String? groupKey}) => Room(
+  Room copyWith({String? networkId, String? networkName, String? bridgeId, String? groupKey, int? unread, bool? markedUnread}) => Room(
     roomId: roomId,
     name: name,
     topic: topic,
     isDm: isDm,
-    unread: unread,
+    unread: unread ?? this.unread,
+    markedUnread: markedUnread ?? this.markedUnread,
     highlights: highlights,
     lastTs: lastTs,
     lastMessage: lastMessage,
@@ -156,6 +259,9 @@ class BackendUpdate {
   const BackendUpdate.roomsChanged() : kind = 'rooms_changed', roomId = null, message = null, state = null;
   const BackendUpdate.newMessage(String this.roomId, Message this.message) : kind = 'new_message', state = null;
   const BackendUpdate.syncState(String this.state) : kind = 'sync_state', roomId = null, message = null;
+
+  /// Reactions / edits / redactions / member names changed in a room.
+  const BackendUpdate.timelineChanged(String this.roomId) : kind = 'timeline_changed', message = null, state = null;
 
   final String kind;
   final String? roomId;

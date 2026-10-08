@@ -69,6 +69,39 @@ pub struct ChatMessage {
     pub thread: Option<ThreadInfo>,
     pub edited: bool,
     pub is_own: bool,
+    /// `mxc://` avatar of the sender in this room.
+    pub sender_avatar: Option<String>,
+    pub media: Option<ChatMedia>,
+    pub reactions: Vec<ChatReaction>,
+    pub tapback: Option<ChatTapback>,
+}
+
+/// Attachment; pass `source` to [`media_bytes`].
+pub struct ChatMedia {
+    pub source: String,
+    pub mimetype: Option<String>,
+    pub size: Option<u64>,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    pub duration_ms: Option<u64>,
+    pub filename: String,
+    pub caption: Option<String>,
+    pub thumbnail_source: Option<String>,
+}
+
+pub struct ChatReaction {
+    pub key: String,
+    pub senders: Vec<String>,
+    pub own: bool,
+}
+
+/// SMS/RCS tapback fallback text ("Loved “…”"), see `crosschat_core::Tapback`.
+pub struct ChatTapback {
+    pub key: String,
+    pub removed: bool,
+    pub target_text: Option<String>,
+    pub truncated: bool,
+    pub target_kind: Option<String>,
 }
 
 pub struct ChatRoom {
@@ -91,6 +124,8 @@ pub struct ChatRoom {
     pub protocol_name: Option<String>,
     pub login_id: Option<String>,
     pub room_type: Option<String>,
+    /// `m.marked_unread` / `com.famedly.marked_unread`.
+    pub marked_unread: bool,
 }
 
 pub struct DirectoryUser {
@@ -99,7 +134,9 @@ pub struct DirectoryUser {
 }
 
 /// Update pushed from the sync loop. `kind` is `rooms_changed`,
-/// `new_message` (with `room_id` + `message`) or `sync_state` (with `state`).
+/// `new_message` (with `room_id` + `message`), `timeline_changed` (with
+/// `room_id`: reactions, edits, redactions, member names changed) or
+/// `sync_state` (with `state`).
 /// A flat struct keeps the generated Dart free of code-gen dependencies.
 pub struct CoreUpdate {
     pub kind: String,
@@ -164,6 +201,34 @@ fn msg(m: core::Message) -> ChatMessage {
         }),
         edited: m.edited,
         is_own: m.is_own,
+        sender_avatar: m.sender_avatar,
+        media: m.media.map(|x| ChatMedia {
+            source: x.source,
+            mimetype: x.mimetype,
+            size: x.size,
+            width: x.width,
+            height: x.height,
+            duration_ms: x.duration_ms,
+            filename: x.filename,
+            caption: x.caption,
+            thumbnail_source: x.thumbnail_source,
+        }),
+        reactions: m
+            .reactions
+            .into_iter()
+            .map(|r| ChatReaction {
+                key: r.key,
+                senders: r.senders,
+                own: r.own,
+            })
+            .collect(),
+        tapback: m.tapback.map(|t| ChatTapback {
+            key: t.key,
+            removed: t.removed,
+            target_text: t.target_text,
+            truncated: t.truncated,
+            target_kind: t.target_kind,
+        }),
     }
 }
 
@@ -186,6 +251,7 @@ fn room(r: core::RoomSummary) -> ChatRoom {
         protocol_name: r.network.as_ref().map(|n| n.protocol_name.clone()),
         login_id: r.network.as_ref().and_then(|n| n.login_id.clone()),
         room_type: r.network.and_then(|n| n.room_type),
+        marked_unread: r.marked_unread,
     }
 }
 
@@ -245,6 +311,10 @@ pub fn subscribe_updates(sink: StreamSink<CoreUpdate>) -> Result<()> {
                     message: Some(msg(message)),
                     ..CoreUpdate::simple("new_message")
                 },
+                core::CoreEvent::TimelineChanged { room_id } => CoreUpdate {
+                    room_id: Some(room_id),
+                    ..CoreUpdate::simple("timeline_changed")
+                },
                 core::CoreEvent::SyncState { state } => CoreUpdate {
                     state: Some(state),
                     ..CoreUpdate::simple("sync_state")
@@ -303,6 +373,32 @@ pub async fn send_text(
 ) -> Result<String> {
     let c = client()?;
     on_rt(async move { c.send_text(&room_id, &body, thread_root.as_deref()).await }).await
+}
+
+/// Mark a room read up to `event_id` (default: its latest message): read
+/// receipt + fully-read marker, clears marked-unread. Returns the event id.
+pub async fn mark_read(room_id: String, event_id: Option<String>) -> Result<Option<String>> {
+    let c = client()?;
+    on_rt(async move { c.mark_read(&room_id, event_id.as_deref()).await }).await
+}
+
+/// Set / clear the room's marked-unread flag.
+pub async fn set_marked_unread(room_id: String, unread: bool) -> Result<()> {
+    let c = client()?;
+    on_rt(async move { c.set_marked_unread(&room_id, unread).await }).await
+}
+
+/// Bytes of an attachment (decrypted) or avatar. `source` is
+/// `ChatMedia::source` / `thumbnail_source` or an `mxc://` URL; with a size,
+/// a server thumbnail is requested where possible.
+pub async fn media_bytes(
+    source: String,
+    thumb_width: Option<u32>,
+    thumb_height: Option<u32>,
+) -> Result<Vec<u8>> {
+    let c = client()?;
+    let thumb = thumb_width.zip(thumb_height);
+    on_rt(async move { c.media(&source, thumb).await }).await
 }
 
 pub async fn search_directory(term: String, limit: u32) -> Result<Vec<DirectoryUser>> {

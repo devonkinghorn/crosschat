@@ -221,7 +221,7 @@ NetworkView resolveNetworks(
     final key = p.network == 'matrix' ? 'matrix' : keyFor(p.network, p.room.loginId);
     rooms.add(p.room.copyWith(networkId: p.network == 'matrix' ? null : p.network, bridgeId: p.bridgeId, groupKey: key));
     counts[key] = (counts[key] ?? 0) + 1;
-    unread[key] = (unread[key] ?? 0) + p.room.unread;
+    unread[key] = (unread[key] ?? 0) + p.room.badgeCount;
     meta.putIfAbsent(key, () => (network: p.network, bridgeId: p.bridgeId, loginId: p.room.loginId, name: p.room.networkName));
   }
 

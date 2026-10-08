@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:typed_data';
 
 import '../local/app_paths.dart';
 
@@ -18,8 +19,7 @@ class FfiBackend implements ChatBackend {
     return dir.path;
   }
 
-  Session _session(rs.SessionInfo s) =>
-      Session(userId: s.userId, deviceId: s.deviceId, homeserver: s.homeserver, accessToken: s.accessToken);
+  Session _session(rs.SessionInfo s) => Session(userId: s.userId, deviceId: s.deviceId, homeserver: s.homeserver, accessToken: s.accessToken);
 
   static Message message(rs.ChatMessage m) => Message(
     eventId: m.eventId,
@@ -32,6 +32,30 @@ class FfiBackend implements ChatBackend {
     inReplyTo: m.inReplyTo,
     edited: m.edited,
     isOwn: m.isOwn,
+    senderAvatar: m.senderAvatar,
+    media: m.media == null
+        ? null
+        : MediaAttachment(
+            source: m.media!.source,
+            filename: m.media!.filename,
+            mimetype: m.media!.mimetype,
+            size: m.media!.size?.toInt(),
+            width: m.media!.width,
+            height: m.media!.height,
+            durationMs: m.media!.durationMs?.toInt(),
+            caption: m.media!.caption,
+            thumbnailSource: m.media!.thumbnailSource,
+          ),
+    reactions: [for (final r in m.reactions) ReactionGroup(key: r.key, senders: r.senders, own: r.own)],
+    tapback: m.tapback == null
+        ? null
+        : TapbackInfo(
+            key: m.tapback!.key,
+            removed: m.tapback!.removed,
+            targetText: m.tapback!.targetText,
+            truncated: m.tapback!.truncated,
+            targetKind: m.tapback!.targetKind,
+          ),
     thread: m.thread == null
         ? null
         : ThreadSummary(
@@ -70,6 +94,8 @@ class FfiBackend implements ChatBackend {
         return BackendUpdate.newMessage(u.roomId!, message(u.message!));
       case 'sync_state':
         return BackendUpdate.syncState(u.state ?? '');
+      case 'timeline_changed':
+        return BackendUpdate.timelineChanged(u.roomId!);
       default:
         return const BackendUpdate.roomsChanged();
     }
@@ -96,26 +122,34 @@ class FfiBackend implements ChatBackend {
           protocolName: r.protocolName,
           loginId: r.loginId,
           roomType: r.roomType,
+          markedUnread: r.markedUnread,
         ),
       )
       .toList();
 
   @override
-  Future<List<Message>> timeline(String roomId, {int limit = 60}) async =>
-      (await rs.roomTimeline(roomId: roomId, limit: limit)).map(message).toList();
+  Future<List<Message>> timeline(String roomId, {int limit = 60}) async => (await rs.roomTimeline(roomId: roomId, limit: limit)).map(message).toList();
 
   @override
   Future<List<Message>> thread(String roomId, String rootId, {int limit = 100}) async =>
       (await rs.threadTimeline(roomId: roomId, rootId: rootId, limit: limit)).map(message).toList();
 
   @override
-  Future<String> sendText(String roomId, String body, {String? threadRoot}) =>
-      rs.sendText(roomId: roomId, body: body, threadRoot: threadRoot);
+  Future<String> sendText(String roomId, String body, {String? threadRoot}) => rs.sendText(roomId: roomId, body: body, threadRoot: threadRoot);
 
   @override
-  Future<List<DirectoryUser>> searchDirectory(String term) async => (await rs.searchDirectory(term: term, limit: 20))
-      .map((u) => DirectoryUser(userId: u.userId, displayName: u.displayName))
-      .toList();
+  Future<void> markRead(String roomId, {String? eventId}) => rs.markRead(roomId: roomId, eventId: eventId);
+
+  @override
+  Future<void> setMarkedUnread(String roomId, bool unread) => rs.setMarkedUnread(roomId: roomId, unread: unread);
+
+  @override
+  Future<Uint8List> mediaBytes(String source, {int? thumbWidth, int? thumbHeight}) =>
+      rs.mediaBytes(source: source, thumbWidth: thumbWidth, thumbHeight: thumbHeight);
+
+  @override
+  Future<List<DirectoryUser>> searchDirectory(String term) async =>
+      (await rs.searchDirectory(term: term, limit: 20)).map((u) => DirectoryUser(userId: u.userId, displayName: u.displayName)).toList();
 
   @override
   Future<String> createDm(String userId) => rs.createDm(userId: userId);

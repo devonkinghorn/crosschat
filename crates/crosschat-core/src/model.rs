@@ -3,6 +3,7 @@
 //! the FFI layer (flutter_rust_bridge) only ever sees simple structs, and the
 //! parsing logic can be unit-tested without a homeserver.
 
+use crate::content::{MediaInfo, Reaction, Tapback};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
@@ -51,6 +52,15 @@ pub struct Message {
     pub thread: Option<ThreadSummary>,
     pub edited: bool,
     pub is_own: bool,
+    /// Room-member avatar (`mxc://`) of the sender, if any.
+    pub sender_avatar: Option<String>,
+    /// Attachment of image / video / audio / file / sticker messages.
+    pub media: Option<MediaInfo>,
+    /// `m.annotation` reactions on this message, grouped by key.
+    pub reactions: Vec<Reaction>,
+    /// Set when the text is an SMS/RCS tapback fallback ("Loved “hi”",
+    /// "\u{200b}👍\u{200b} to “hi”"); the UI folds it into the quoted message.
+    pub tapback: Option<Tapback>,
 }
 
 /// Bridged network a room belongs to, derived from `m.bridge` state or from
@@ -93,6 +103,9 @@ pub struct RoomSummary {
     /// Whether the bridge declares thread support for this room. `None` means
     /// unknown (plain Matrix rooms always support threads).
     pub threads_supported: Option<bool>,
+    /// Explicitly marked unread (`m.marked_unread`, or the unstable
+    /// `com.famedly.marked_unread`).
+    pub marked_unread: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -112,6 +125,9 @@ pub enum CoreEvent {
     NewMessage { room_id: String, message: Message },
     /// Sync state changed (`syncing`, `error: ...`, `stopped`).
     SyncState { state: String },
+    /// Something already shown in a room's timeline changed: reactions,
+    /// edits, redactions, or member names/avatars. Reload it if open.
+    TimelineChanged { room_id: String },
 }
 
 /// Read `content.m.relates_to` of an event and return `(rel_type, event_id)`.
@@ -264,9 +280,34 @@ pub fn parse_event(raw: &Value, own_user: &str) -> Option<Message> {
         .and_then(|r| r.get("m.replace"))
         .is_some();
 
+    let media = match kind {
+        MessageKind::Image
+        | MessageKind::Video
+        | MessageKind::Audio
+        | MessageKind::File
+        | MessageKind::Sticker => crate::content::parse_media(content),
+        _ => None,
+    };
+    // A media body is the file name unless `filename` says otherwise, in
+    // which case the body is a caption (MSC2530).
+    let body = match &media {
+        Some(m) => m.caption.clone().unwrap_or_default(),
+        None => body,
+    };
+    let tapback = match kind {
+        MessageKind::Text | MessageKind::Notice if thread_root.is_none() => {
+            crate::content::parse_tapback(&body)
+        }
+        _ => None,
+    };
+
     Some(Message {
         is_own: sender == own_user,
-        sender_name: sender.clone(),
+        sender_name: crate::content::fallback_name(&sender),
+        sender_avatar: None,
+        media,
+        reactions: Vec::new(),
+        tapback,
         event_id,
         sender,
         body,
@@ -305,6 +346,8 @@ pub fn build_main_timeline(raw_events: &[Value], own_user: &str) -> Vec<Message>
         }
     }
 
+    let reactions = crate::content::collect_reactions(raw_events, own_user);
+
     let mut main: Vec<Message> = Vec::new();
     let mut replies: BTreeMap<String, Vec<Message>> = BTreeMap::new();
     for ev in raw_events {
@@ -312,8 +355,14 @@ pub fn build_main_timeline(raw_events: &[Value], own_user: &str) -> Vec<Message>
             continue;
         };
         if let Some(body) = edits.get(&msg.event_id) {
-            msg.body = body.clone();
+            // An edited media message keeps its attachment; the new body is its caption.
+            if msg.media.is_none() {
+                msg.body = body.clone();
+            }
             msg.edited = true;
+        }
+        if let Some(r) = reactions.get(&msg.event_id) {
+            msg.reactions = r.clone();
         }
         match &msg.thread_root {
             Some(root) => replies.entry(root.clone()).or_default().push(msg),

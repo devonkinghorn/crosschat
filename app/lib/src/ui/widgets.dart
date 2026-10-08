@@ -1,28 +1,60 @@
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 
+import 'media_cache.dart';
 import 'theme.dart';
 
-/// Deterministic colored initials avatar (no media loading in the alpha).
+/// Avatar: the user's picture (`mxc://`) when they have one, else
+/// deterministic colored initials.
 class Avatar extends StatelessWidget {
-  const Avatar({super.key, required this.name, this.size = 36, this.seed});
+  const Avatar({super.key, required this.name, this.size = 36, this.seed, this.mxc});
   final String name;
   final String? seed;
   final double size;
+  final String? mxc;
 
   static const _palette = [
-    Color(0xFF5865F2), Color(0xFFEB459E), Color(0xFF3BA55C), Color(0xFFFAA61A),
-    Color(0xFFED4245), Color(0xFF9B59B6), Color(0xFF1ABC9C), Color(0xFFE67E22),
+    Color(0xFF5865F2),
+    Color(0xFFEB459E),
+    Color(0xFF3BA55C),
+    Color(0xFFFAA61A),
+    Color(0xFFED4245),
+    Color(0xFF9B59B6),
+    Color(0xFF1ABC9C),
+    Color(0xFFE67E22),
   ];
 
   @override
   Widget build(BuildContext context) {
+    final url = mxc;
+    if (url == null || !url.startsWith('mxc://') || MediaCache.instance.backend == null) return _initials();
+    final px = (size * 2).round();
+    return FutureBuilder<Uint8List>(
+      future: MediaCache.instance.load(url, thumbWidth: px, thumbHeight: px),
+      builder: (context, snap) => snap.hasData
+          ? ClipRRect(
+              borderRadius: BorderRadius.circular(size * 0.3),
+              child: Image.memory(
+                snap.data!,
+                width: size,
+                height: size,
+                fit: BoxFit.cover,
+                cacheWidth: px,
+                gaplessPlayback: true,
+                errorBuilder: (_, _, _) => _initials(),
+              ),
+            )
+          : _initials(),
+    );
+  }
+
+  Widget _initials() {
     final s = seed ?? name;
     final color = _palette[s.codeUnits.fold(0, (a, c) => a + c) % _palette.length];
     final clean = name.replaceAll(RegExp(r'^[@#!]'), '').trim();
     final parts = clean.split(RegExp(r'[\s_.-]+')).where((p) => p.isNotEmpty).toList();
-    final initials = parts.isEmpty
-        ? '?'
-        : (parts.length == 1 ? parts.first.substring(0, 1) : '${parts[0][0]}${parts[1][0]}').toUpperCase();
+    final initials = parts.isEmpty ? '?' : (parts.length == 1 ? parts.first.substring(0, 1) : '${parts[0][0]}${parts[1][0]}').toUpperCase();
     return Container(
       width: size,
       height: size,
