@@ -54,6 +54,46 @@ class LocalServerStatus {
   bool get failed => phase == 'failed';
 }
 
+/// "Allow access from other devices" (`/_crosschat/v1/local/remote-access`):
+/// a second listener that other devices reach through a reverse proxy.
+class RemoteAccessStatus {
+  const RemoteAccessStatus({
+    this.enabled = false,
+    this.address = '0.0.0.0',
+    this.port = 8008,
+    this.publicUrl,
+    this.listening,
+    this.error,
+    this.proxyTargets = const [],
+    this.serverName = 'localhost',
+  });
+
+  factory RemoteAccessStatus.fromJson(Map<String, dynamic> j) => RemoteAccessStatus(
+    enabled: j['enabled'] as bool? ?? false,
+    address: j['address'] as String? ?? '0.0.0.0',
+    port: (j['port'] as num?)?.toInt() ?? 8008,
+    publicUrl: j['public_url'] as String?,
+    listening: j['listening'] as String?,
+    error: j['error'] as String?,
+    proxyTargets: [for (final t in (j['proxy_targets'] as List? ?? const [])) t as String],
+    serverName: j['server_name'] as String? ?? 'localhost',
+  );
+
+  final bool enabled;
+  final String address;
+  final int port;
+  final String? publicUrl;
+
+  /// `host:port` while the listener is up.
+  final String? listening;
+  final String? error;
+
+  /// `http://<LAN IP>:<port>` (and `http://Name.local:<port>`): where the
+  /// reverse proxy should forward to.
+  final List<String> proxyTargets;
+  final String serverName;
+}
+
 class LocalServerException implements Exception {
   LocalServerException(this.message, {this.errcode});
   final String message;
@@ -93,6 +133,13 @@ abstract class LocalServerController {
 
   /// Where the server keeps its data (for display).
   Future<String> dataDir();
+
+  /// Access from other devices (desktop only).
+  Future<RemoteAccessStatus> remoteAccess() async => throw LocalServerException('Not available on this device');
+
+  /// Turn access from other devices on or off; saved on the server and
+  /// applied right away.
+  Future<RemoteAccessStatus> setRemoteAccess({required bool enabled, String? publicUrl}) async => throw LocalServerException('Not available on this device');
 }
 
 /// Same rules crosschatd enforces (Matrix localpart).
@@ -306,6 +353,29 @@ class ProcessLocalServer implements LocalServerController {
     }
     return (body as Map)['user_id'] as String;
   }
+
+  Future<RemoteAccessStatus> _remote(String method, [Map<String, dynamic>? body]) async {
+    final dir = await dataDir();
+    final token = (await File('$dir/data/admin.token').readAsString()).trim();
+    final uri = Uri.parse('$daemonUrl/_crosschat/v1/local/remote-access');
+    final headers = {'Authorization': 'Bearer $token', 'Content-Type': 'application/json'};
+    final r = await (method == 'PUT' ? _http.put(uri, headers: headers, body: jsonEncode(body)) : _http.get(uri, headers: headers)).timeout(
+      const Duration(seconds: 20),
+    );
+    final j = r.body.isEmpty ? null : jsonDecode(r.body);
+    if (r.statusCode != 200) {
+      final m = j is Map ? j : const {};
+      if (r.statusCode == 404) throw LocalServerException('Restart the server to use this (it is running an older version).');
+      throw LocalServerException((m['error'] ?? 'HTTP ${r.statusCode}').toString(), errcode: m['errcode'] as String?);
+    }
+    return RemoteAccessStatus.fromJson(j as Map<String, dynamic>);
+  }
+
+  @override
+  Future<RemoteAccessStatus> remoteAccess() => _remote('GET');
+
+  @override
+  Future<RemoteAccessStatus> setRemoteAccess({required bool enabled, String? publicUrl}) => _remote('PUT', {'enabled': enabled, 'public_url': publicUrl ?? ''});
 
   @override
   Future<void> stop() async {

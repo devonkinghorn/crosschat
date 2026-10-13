@@ -70,6 +70,28 @@ async fn fake_hs(token: &'static str, seen: Arc<Mutex<Vec<Value>>>) -> String {
             }
         }),
     );
+    // What other devices may reach through the remote-access listener.
+    let app = app
+        .route(
+            "/_matrix/client/versions",
+            axum::routing::get(|| async { Json(json!({"versions": ["v1.11"]})) }),
+        )
+        .route(
+            "/_matrix/media/v3/upload",
+            post(
+                |headers: axum::http::HeaderMap, body: axum::body::Bytes| async move {
+                    Json(json!({
+                        "len": body.len(),
+                        "auth": headers.get("authorization").and_then(|v| v.to_str().ok()),
+                    }))
+                },
+            ),
+        )
+        .layer(axum::extract::DefaultBodyLimit::disable())
+        .route(
+            "/_matrix/federation/v1/version",
+            axum::routing::get(|| async { "federation must not be reachable" }),
+        );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
@@ -289,4 +311,132 @@ async fn wrong_registration_token_is_reported() {
     assert_eq!(err.1, "CC_REGISTER_FAILED");
     assert!(err.2.contains("registration token"), "{}", err.2);
     assert_eq!(seen.lock().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn remote_access_exposes_only_the_client_api() {
+    let f = fixture().await;
+    ready(&f);
+    let admin = f.local.admin_token.clone();
+    let port = {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        l.local_addr().unwrap().port()
+    };
+    let uri = "/_crosschat/v1/local/remote-access";
+    let (s, _) = call(
+        &f.app,
+        "PUT",
+        uri,
+        Some("nope"),
+        Some(json!({"enabled": true})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::UNAUTHORIZED);
+    let (s, v) = call(
+        &f.app,
+        "PUT",
+        uri,
+        Some(&admin),
+        Some(json!({"enabled": true, "public_url": "ftp://x"})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "{v}");
+
+    let (s, v) = call(
+        &f.app,
+        "PUT",
+        uri,
+        Some(&admin),
+        Some(json!({"enabled": true, "address": "127.0.0.1", "port": port, "public_url": "https://matrix.example.com/"})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["enabled"], true);
+    assert_eq!(v["listening"], format!("127.0.0.1:{port}"));
+    assert_eq!(v["public_url"], "https://matrix.example.com");
+    assert_eq!(v["server_name"], "localhost");
+    assert_eq!(v["proxy_targets"][0], format!("http://127.0.0.1:{port}"));
+    // Saved for the next start.
+    let toml = std::fs::read_to_string(f.paths.config()).unwrap();
+    let saved = crosschatd::config::Config::from_toml(&toml).unwrap();
+    assert!(saved.remote_access.enabled);
+    assert_eq!(saved.remote_access.port, port);
+    let (_, got) = call(&f.app, "GET", uri, Some(&admin), None).await;
+    assert_eq!(got["listening"], v["listening"]);
+
+    let base = format!("http://127.0.0.1:{port}");
+    let http = reqwest::Client::new();
+    let wk: Value = http
+        .get(format!("{base}/.well-known/matrix/client"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(wk["m.homeserver"]["base_url"], "https://matrix.example.com");
+    let versions: Value = http
+        .get(format!("{base}/_matrix/client/versions"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(versions["versions"][0], "v1.11");
+    // Big uploads stream through, with the caller's token.
+    let up: Value = http
+        .post(format!("{base}/_matrix/media/v3/upload"))
+        .header("authorization", "Bearer phone")
+        .body(vec![7u8; 5 * 1024 * 1024])
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(up["len"], 5 * 1024 * 1024);
+    assert_eq!(up["auth"], "Bearer phone");
+    for path in [
+        "/_matrix/federation/v1/version",
+        "/_matrix/client/../federation/v1/version",
+        "/_crosschat/v1/local/status",
+        "/_crosschat/internal/bridge-status/slack",
+    ] {
+        let r = http.get(format!("{base}{path}")).send().await.unwrap();
+        assert_eq!(r.status(), reqwest::StatusCode::NOT_FOUND, "{path}");
+    }
+    // crosschatd's user API works from other devices (Matrix token auth).
+    f.local.daemon().unwrap().add_admin("@devon:localhost");
+    let r = http
+        .get(format!("{base}/_crosschat/v1/networks"))
+        .header("authorization", "Bearer owner-token")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), reqwest::StatusCode::OK);
+    let r = http
+        .get(format!("{base}/_crosschat/v1/networks"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), reqwest::StatusCode::UNAUTHORIZED);
+
+    // Off: the listener goes away.
+    let (s, v) = call(
+        &f.app,
+        "PUT",
+        uri,
+        Some(&admin),
+        Some(json!({"enabled": false})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["listening"], Value::Null);
+    assert!(
+        http.get(format!("{base}/_matrix/client/versions"))
+            .send()
+            .await
+            .is_err()
+    );
 }

@@ -40,6 +40,8 @@ pub fn tuwunel_config(cfg: &Config, b: &BundledConfig, registration_token: &str)
         toml_str(registration_token)
     ));
     out.push_str("new_user_displayname_suffix = \"\"\n");
+    // Photos and videos from phones (default 24 MiB).
+    out.push_str("max_request_size = 104857600\n");
     if !federation {
         out.push_str("trusted_servers = []\n");
     }

@@ -4,6 +4,7 @@ import '../daemon/daemon_client.dart';
 import '../state/app_state.dart';
 import 'add_network_dialog.dart';
 import 'networks.dart';
+import 'remote_access_section.dart';
 import 'theme.dart';
 
 class SettingsScreen extends StatefulWidget {
@@ -61,11 +62,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ListTile(
                       key: const Key('local-server-info'),
                       leading: const Icon(Icons.computer_rounded, color: CC.accent),
-                      title: const Text('localhost · this computer only'),
+                      title: const Text('localhost · on this computer'),
                       subtitle: FutureBuilder<String>(
                         future: s.localServer!.dataDir(),
-                        builder: (context, snap) =>
-                            Text('No federation; phones can\'t reach it. Data: ${snap.data ?? '…'}', style: const TextStyle(color: CC.textMuted)),
+                        builder: (context, snap) => Text('No federation. Data: ${snap.data ?? '…'}', style: const TextStyle(color: CC.textMuted)),
                       ),
                       trailing: OutlinedButton(
                         key: const Key('local-restart'),
@@ -83,6 +83,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         padding: const EdgeInsets.symmetric(horizontal: 16),
                         child: Text(s.localError!, style: const TextStyle(color: CC.danger, fontSize: 13)),
                       ),
+                    RemoteAccessSection(local: s.localServer!, userId: s.session?.userId),
                   ],
                   _section('Networks (crosschatd)'),
                   if (!s.isLocalSession)

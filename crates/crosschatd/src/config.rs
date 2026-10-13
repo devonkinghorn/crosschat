@@ -3,7 +3,7 @@
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::net::SocketAddr;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -24,6 +24,71 @@ pub struct Config {
     pub auth: AuthConfig,
     #[serde(default)]
     pub bridges: BTreeMap<String, BridgeConfig>,
+    /// Local mode: let other devices (a phone through a reverse proxy) reach
+    /// this server. See `remote.rs`.
+    #[serde(default)]
+    pub remote_access: RemoteAccessConfig,
+}
+
+/// `[remote_access]`: a second listener for other devices. It forwards only
+/// the Matrix client-server API (`/_matrix/client`, `/_matrix/media`) to the
+/// bundled homeserver, serves `/.well-known/matrix/client` and crosschatd's
+/// user API. Bridges, appservice traffic, federation and local-only
+/// endpoints stay on 127.0.0.1.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct RemoteAccessConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    /// Address to listen on (`0.0.0.0` = every interface).
+    #[serde(default = "default_remote_address")]
+    pub address: IpAddr,
+    #[serde(default = "default_remote_port")]
+    pub port: u16,
+    /// The URL other devices use, e.g. `https://matrix.example.com` (a
+    /// reverse proxy in front of `address:port`). Served in
+    /// `/.well-known/matrix/client`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub public_url: Option<String>,
+}
+
+pub const DEFAULT_REMOTE_PORT: u16 = 8008;
+
+fn default_remote_address() -> IpAddr {
+    IpAddr::V4(Ipv4Addr::UNSPECIFIED)
+}
+fn default_remote_port() -> u16 {
+    DEFAULT_REMOTE_PORT
+}
+
+impl Default for RemoteAccessConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            address: default_remote_address(),
+            port: DEFAULT_REMOTE_PORT,
+            public_url: None,
+        }
+    }
+}
+
+impl RemoteAccessConfig {
+    pub fn validate(&self) -> Result<()> {
+        if let Some(u) = &self.public_url {
+            let parsed =
+                url::Url::parse(u).with_context(|| format!("public URL `{u}` isn't a URL"))?;
+            if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
+                bail!("public URL `{u}` must be an http(s) URL like https://matrix.example.com");
+            }
+            if parsed.query().is_some() || parsed.fragment().is_some() {
+                bail!("public URL `{u}` can't have a query or fragment");
+            }
+        }
+        if self.port == 0 {
+            bail!("remote_access.port can't be 0");
+        }
+        Ok(())
+    }
 }
 
 fn default_listen() -> SocketAddr {
@@ -158,6 +223,7 @@ impl Config {
                 );
             }
         }
+        self.remote_access.validate()?;
         for a in &self.auth.admins {
             if !a.starts_with('@') || !a.contains(':') {
                 bail!("auth.admins entry `{a}` is not a Matrix user ID");
@@ -177,6 +243,39 @@ impl Config {
             RegistrationMode::Directory { path } => path.clone(),
             RegistrationMode::Manual => self.data_dir.join("registrations"),
         }
+    }
+
+    /// Save `[remote_access]` to the config file on disk, keeping the rest of
+    /// the file as it is.
+    pub fn set_remote_access(path: &Path, ra: &RemoteAccessConfig) -> Result<()> {
+        let text =
+            std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+        let mut doc: toml_edit::DocumentMut = text
+            .parse()
+            .with_context(|| format!("parsing {}", path.display()))?;
+        let entry = doc
+            .entry("remote_access")
+            .or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()));
+        let table = entry
+            .as_table_like_mut()
+            .with_context(|| format!("[remote_access] in {} is not a table", path.display()))?;
+        table.insert("enabled", toml_edit::value(ra.enabled));
+        table.insert("address", toml_edit::value(ra.address.to_string()));
+        table.insert("port", toml_edit::value(i64::from(ra.port)));
+        match &ra.public_url {
+            Some(u) => {
+                table.insert("public_url", toml_edit::value(u.as_str()));
+            }
+            None => {
+                table.remove("public_url");
+            }
+        }
+        let out = doc.to_string();
+        Self::from_toml(&out)?;
+        let tmp = path.with_extension("toml.tmp");
+        std::fs::write(&tmp, out)?;
+        std::fs::rename(&tmp, path)?;
+        Ok(())
     }
 
     /// Turn a bridge on or off in the config file on disk, keeping the rest

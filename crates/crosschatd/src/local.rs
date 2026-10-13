@@ -266,6 +266,12 @@ pub struct LocalServer {
     owner: RwLock<Option<String>>,
     daemon: OnceLock<Arc<Daemon>>,
     api: OnceLock<Router>,
+    /// Client for forwarding other devices' requests to the homeserver: no
+    /// redirects, no timeout (long-polling `/sync`, large media).
+    pub proxy_http: reqwest::Client,
+    /// Access from other devices (`[remote_access]`).
+    remote: tokio::sync::Mutex<crate::remote::Runtime>,
+    remote_public_url: RwLock<Option<String>>,
     owner_lock: tokio::sync::Mutex<()>,
     /// Modification time of our executable when we started: the app compares
     /// it with the crosschatd it ships and restarts us after an update.
@@ -290,6 +296,7 @@ impl LocalServer {
             admin_token.as_bytes(),
         )?;
         let owner = LocalState::load(&paths.state())?.owner;
+        let remote = cfg.remote_access.clone();
         Ok(Arc::new(Self {
             paths,
             cfg,
@@ -305,6 +312,11 @@ impl LocalServer {
             owner: RwLock::new(owner),
             daemon: OnceLock::new(),
             api: OnceLock::new(),
+            proxy_http: reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .build()?,
+            remote_public_url: RwLock::new(remote.public_url.clone()),
+            remote: tokio::sync::Mutex::new(crate::remote::Runtime::new(remote)),
             owner_lock: Default::default(),
             exe_mtime_ms: exe_mtime_ms(),
         }))
@@ -329,12 +341,42 @@ impl LocalServer {
         self.daemon.get()
     }
 
+    /// crosschatd's regular API, once the daemon is ready.
+    pub fn api_router(&self) -> Option<Router> {
+        self.api.get().cloned()
+    }
+
+    pub fn remote_public_url(&self) -> Option<String> {
+        self.remote_public_url.read().unwrap().clone()
+    }
+
+    /// Apply `[remote_access]` (start/stop the listener for other devices).
+    pub async fn apply_remote_access(
+        self: &Arc<Self>,
+        ra: crate::config::RemoteAccessConfig,
+    ) -> Value {
+        let mut rt = self.remote.lock().await;
+        crate::remote::apply(self, &mut rt, ra).await;
+        *self.remote_public_url.write().unwrap() = rt.cfg.public_url.clone();
+        if let Some(d) = self.daemon() {
+            d.set_remote_keep_awake(rt.listening.is_some());
+        }
+        crate::remote::status_json(&self.cfg, &rt)
+    }
+
+    pub async fn remote_status(&self) -> Value {
+        crate::remote::status_json(&self.cfg, &*self.remote.lock().await)
+    }
+
     /// Mark the daemon ready and start routing the regular API to it.
     pub fn set_ready(&self, d: Arc<Daemon>) {
         if let Some(o) = self.owner() {
             d.add_admin(&o);
         }
         let _ = self.api.set(crate::api::router(d.clone()));
+        if let Ok(rt) = self.remote.try_lock() {
+            d.set_remote_keep_awake(rt.listening.is_some());
+        }
         let _ = self.daemon.set(d);
         *self.status.write().unwrap() = Status {
             phase: Phase::Ready,
@@ -574,6 +616,10 @@ pub fn router(local: Arc<LocalServer>) -> Router {
         .route("/_crosschat/v1/health", get(health))
         .route("/_crosschat/v1/local/status", get(status))
         .route("/_crosschat/v1/local/owner", post(owner))
+        .route(
+            "/_crosschat/v1/local/remote-access",
+            get(remote_access_get).put(remote_access_put),
+        )
         .fallback(fallback)
         .with_state(local)
 }
@@ -614,6 +660,67 @@ async fn owner(
         "user_id": user_id,
         "homeserver_url": l.cfg.homeserver.url,
     })))
+}
+
+fn require_admin(l: &LocalServer, headers: &HeaderMap) -> Result<(), ApiError> {
+    if bearer(headers).is_some_and(|t| secret_eq(t, &l.admin_token)) {
+        Ok(())
+    } else {
+        Err(ApiError(
+            StatusCode::UNAUTHORIZED,
+            "M_UNKNOWN_TOKEN",
+            "the local admin token (data/admin.token) is required".into(),
+        ))
+    }
+}
+
+async fn remote_access_get(
+    State(l): State<LocalState_>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, ApiError> {
+    require_admin(&l, &headers)?;
+    Ok(Json(l.remote_status().await))
+}
+
+/// `PUT /_crosschat/v1/local/remote-access {enabled, public_url?, port?, address?}`:
+/// save to `crosschatd.toml` and apply right away (no restart).
+#[derive(Deserialize)]
+struct RemoteAccessBody {
+    enabled: bool,
+    #[serde(default)]
+    public_url: Option<String>,
+    #[serde(default)]
+    port: Option<u16>,
+    #[serde(default)]
+    address: Option<std::net::IpAddr>,
+}
+
+async fn remote_access_put(
+    State(l): State<LocalState_>,
+    headers: HeaderMap,
+    Json(b): Json<RemoteAccessBody>,
+) -> Result<Json<Value>, ApiError> {
+    require_admin(&l, &headers)?;
+    let current = l.remote.lock().await.cfg.clone();
+    let ra = crate::config::RemoteAccessConfig {
+        enabled: b.enabled,
+        address: b.address.unwrap_or(current.address),
+        port: b.port.unwrap_or(current.port),
+        public_url: b
+            .public_url
+            .map(|u| u.trim().trim_end_matches('/').to_string())
+            .filter(|u| !u.is_empty()),
+    };
+    ra.validate()
+        .map_err(|e| ApiError(StatusCode::BAD_REQUEST, "M_INVALID_PARAM", format!("{e:#}")))?;
+    crate::config::Config::set_remote_access(&l.paths.config(), &ra).map_err(|e| {
+        ApiError(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "CC_STATE",
+            format!("saving crosschatd.toml: {e:#}"),
+        )
+    })?;
+    Ok(Json(l.apply_remote_access(ra).await))
 }
 
 async fn fallback(State(l): State<LocalState_>, req: Request<Body>) -> Response {
@@ -672,6 +779,11 @@ pub async fn run(paths: LocalPaths, opts: LocalOptions) -> Result<()> {
         dir = %paths.root.display(),
         "crosschatd local mode on http://{listen}/_crosschat/v1/local/status"
     );
+    if local.cfg.remote_access.enabled {
+        local
+            .apply_remote_access(local.cfg.remote_access.clone())
+            .await;
+    }
     let setup = {
         let l = local.clone();
         tokio::spawn(async move { l.setup().await })

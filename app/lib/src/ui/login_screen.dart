@@ -74,20 +74,33 @@ class _LoginScreenState extends State<LoginScreen> {
                         ),
                       const Icon(Icons.hub_rounded, size: 44, color: CC.accent),
                       const SizedBox(height: 12),
-                      const Text('Welcome to Crosschat', textAlign: TextAlign.center, style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
+                      const Text(
+                        'Welcome to Crosschat',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700),
+                      ),
                       const SizedBox(height: 4),
-                      Text(widget.subtitle, textAlign: TextAlign.center, style: const TextStyle(color: CC.textMuted)),
+                      Text(
+                        widget.subtitle,
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(color: CC.textMuted),
+                      ),
                       if (widget.notice != null) ...[const SizedBox(height: 16), widget.notice!],
                       const SizedBox(height: 24),
                       _label('HOMESERVER'),
-                      TextField(key: const Key('homeserver'), controller: _hs, keyboardType: TextInputType.url),
+                      TextField(
+                        key: const Key('homeserver'),
+                        controller: _hs,
+                        keyboardType: TextInputType.url,
+                        decoration: const InputDecoration(helperText: 'URL (https://matrix.example.com) or server name'),
+                      ),
                       const SizedBox(height: 14),
                       _label('USERNAME'),
                       TextField(
                         key: const Key('username'),
                         controller: _user,
                         autofillHints: const [AutofillHints.username],
-                        decoration: const InputDecoration(hintText: 'devon or @devon:example.com'),
+                        decoration: const InputDecoration(hintText: 'devon or @devon:localhost'),
                       ),
                       const SizedBox(height: 14),
                       _label('PASSWORD'),
@@ -98,18 +111,13 @@ class _LoginScreenState extends State<LoginScreen> {
                         autofillHints: const [AutofillHints.password],
                         onSubmitted: (_) => _submit(),
                       ),
-                      if (error != null) ...[
-                        const SizedBox(height: 12),
-                        Text(error, style: const TextStyle(color: CC.danger, fontSize: 13)),
-                      ],
+                      if (error != null) ...[const SizedBox(height: 12), Text(error, style: const TextStyle(color: CC.danger, fontSize: 13))],
                       const SizedBox(height: 20),
                       FilledButton(
                         key: const Key('login'),
                         style: FilledButton.styleFrom(backgroundColor: CC.accent, padding: const EdgeInsets.symmetric(vertical: 14)),
                         onPressed: _busy ? null : _submit,
-                        child: _busy
-                            ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
-                            : const Text('Log in'),
+                        child: _busy ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)) : const Text('Log in'),
                       ),
                       const SizedBox(height: 12),
                       const Text(
@@ -130,6 +138,9 @@ class _LoginScreenState extends State<LoginScreen> {
 
   Widget _label(String t) => Padding(
     padding: const EdgeInsets.only(bottom: 6),
-    child: Text(t, style: const TextStyle(color: CC.textMuted, fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: 0.5)),
+    child: Text(
+      t,
+      style: const TextStyle(color: CC.textMuted, fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: 0.5),
+    ),
   );
 }

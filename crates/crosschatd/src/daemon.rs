@@ -45,6 +45,8 @@ pub struct Daemon {
     /// Enable/disable/remove run one at a time.
     ops: tokio::sync::Mutex<()>,
     keep_awake: Mutex<Option<std::process::Child>>,
+    /// Keep the Mac awake for other devices (local mode remote access).
+    remote_keep_awake: std::sync::atomic::AtomicBool,
 }
 
 pub fn admin_token_path(cfg: &Config) -> PathBuf {
@@ -233,6 +235,7 @@ impl Daemon {
             hs_loaded: Default::default(),
             ops: Default::default(),
             keep_awake: Mutex::new(None),
+            remote_keep_awake: Default::default(),
         }
     }
 
@@ -658,16 +661,24 @@ impl Daemon {
 
     /// macOS: hold a `caffeinate -i` assertion (no idle sleep; the display
     /// may still sleep) while a bridge that needs the Mac awake is enabled.
+    /// Other devices use this server (local mode remote access): keep the
+    /// Mac awake like iMessage does.
+    pub fn set_remote_keep_awake(&self, on: bool) {
+        self.remote_keep_awake
+            .store(on, std::sync::atomic::Ordering::Relaxed);
+        self.update_keep_awake();
+    }
+
     fn update_keep_awake(&self) {
         if !cfg!(target_os = "macos") {
             return;
         }
-        let needed = self
-            .bridges
-            .read()
-            .unwrap()
-            .values()
-            .any(|rt| rt.manifest.keep_awake && rt.handle().is_some() && !rt.awaiting_setup());
+        let needed =
+            self.remote_keep_awake
+                .load(std::sync::atomic::Ordering::Relaxed)
+                || self.bridges.read().unwrap().values().any(|rt| {
+                    rt.manifest.keep_awake && rt.handle().is_some() && !rt.awaiting_setup()
+                });
         let mut ka = self.keep_awake.lock().unwrap();
         if let Some(child) = ka.as_mut()
             && child.try_wait().ok().flatten().is_some()
@@ -685,7 +696,7 @@ impl Daemon {
                     .spawn()
                 {
                     Ok(c) => {
-                        info!("keeping this Mac awake while iMessage runs (caffeinate -i)");
+                        info!("keeping this Mac awake (caffeinate -i)");
                         *ka = Some(c);
                     }
                     Err(e) => warn!("couldn't start caffeinate: {e}"),

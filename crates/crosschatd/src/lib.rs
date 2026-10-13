@@ -17,6 +17,7 @@ pub mod local_setup;
 pub mod manifest;
 pub mod proxy;
 pub mod registration;
+pub mod remote;
 pub mod secrets;
 pub mod supervisor;
 pub mod template;

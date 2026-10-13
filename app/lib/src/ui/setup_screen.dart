@@ -31,11 +31,7 @@ class _SetupScreenState extends State<SetupScreen> {
     final state = widget.state;
     switch (_mode) {
       case _Mode.existing:
-        return LoginScreen(
-          key: const Key('existing-login'),
-          state: state,
-          onBack: () => _go(_Mode.choose),
-        );
+        return LoginScreen(key: const Key('existing-login'), state: state, onBack: () => _go(_Mode.choose));
       case _Mode.localLogin:
         final owner = state.localOwner ?? '';
         final localpart = owner.startsWith('@') ? owner.substring(1).split(':').first : owner;
@@ -50,9 +46,13 @@ class _SetupScreenState extends State<SetupScreen> {
           notice: state.localError == null ? null : _LocalErrorNotice(state: state),
         );
       case _Mode.local:
-        return _Shell(child: _NewServerForm(state: state, onBack: () => _go(_Mode.choose)));
+        return _Shell(
+          child: _NewServerForm(state: state, onBack: () => _go(_Mode.choose)),
+        );
       case _Mode.choose:
-        return _Shell(child: _Chooser(state: state, onLocal: () => _go(_Mode.local), onExisting: () => _go(_Mode.existing)));
+        return _Shell(
+          child: _Chooser(state: state, onLocal: () => _go(_Mode.local), onExisting: () => _go(_Mode.existing)),
+        );
     }
   }
 }
@@ -94,9 +94,17 @@ class _Chooser extends StatelessWidget {
       children: [
         const Icon(Icons.hub_rounded, size: 44, color: CC.accent),
         const SizedBox(height: 12),
-        const Text('Welcome to Crosschat', textAlign: TextAlign.center, style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
+        const Text(
+          'Welcome to Crosschat',
+          textAlign: TextAlign.center,
+          style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700),
+        ),
         const SizedBox(height: 4),
-        const Text('Where should your chats live?', textAlign: TextAlign.center, style: TextStyle(color: CC.textMuted)),
+        const Text(
+          'Where should your chats live?',
+          textAlign: TextAlign.center,
+          style: TextStyle(color: CC.textMuted),
+        ),
         const SizedBox(height: 24),
         _OptionCard(
           key: const Key('setup-local'),
@@ -114,7 +122,9 @@ class _Chooser extends StatelessWidget {
           key: const Key('setup-existing'),
           icon: Icons.public_rounded,
           title: 'Use an existing Matrix server',
-          subtitle: 'Sign in to your own Synapse/Tuwunel, matrix.org or any homeserver.',
+          subtitle: supported
+              ? 'Sign in to your own Synapse/Tuwunel, matrix.org or any homeserver.'
+              : 'Sign in to the Crosschat server on your computer (its HTTPS address, e.g. https://matrix.example.com) or any Matrix homeserver.',
           primary: !supported,
           onTap: onExisting,
         ),
@@ -177,7 +187,10 @@ class _OptionCard extends StatelessWidget {
                             Container(
                               padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                               decoration: BoxDecoration(color: CC.success, borderRadius: BorderRadius.circular(4)),
-                              child: Text(badge!, style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: Colors.white)),
+                              child: Text(
+                                badge!,
+                                style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: Colors.white),
+                              ),
                             ),
                         ],
                       ),
@@ -186,7 +199,11 @@ class _OptionCard extends StatelessWidget {
                     ],
                   ),
                 ),
-                if (enabled) const Padding(padding: EdgeInsets.only(left: 8, top: 10), child: Icon(Icons.chevron_right, color: CC.textMuted)),
+                if (enabled)
+                  const Padding(
+                    padding: EdgeInsets.only(left: 8, top: 10),
+                    child: Icon(Icons.chevron_right, color: CC.textMuted),
+                  ),
               ],
             ),
           ),
@@ -223,9 +240,7 @@ class _NewServerFormState extends State<_NewServerForm> {
 
   Future<void> _submit() async {
     final user = _user.text.trim().replaceFirst(RegExp(r'^@'), '').toLowerCase();
-    final v = validateLocalpart(user) ??
-        validatePassword(_pass.text) ??
-        (_pass.text != _confirm.text ? 'Passwords don\'t match.' : null);
+    final v = validateLocalpart(user) ?? validatePassword(_pass.text) ?? (_pass.text != _confirm.text ? 'Passwords don\'t match.' : null);
     setState(() => _validation = v);
     if (v != null) return;
     setState(() => _busy = true);
@@ -254,9 +269,17 @@ class _NewServerFormState extends State<_NewServerForm> {
           ),
           const Icon(Icons.computer_rounded, size: 40, color: CC.accent),
           const SizedBox(height: 10),
-          const Text('New server on this computer', textAlign: TextAlign.center, style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700)),
+          const Text(
+            'New server on this computer',
+            textAlign: TextAlign.center,
+            style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
+          ),
           const SizedBox(height: 4),
-          const Text('Create the owner account for your server.', textAlign: TextAlign.center, style: TextStyle(color: CC.textMuted)),
+          const Text(
+            'Create the owner account for your server.',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: CC.textMuted),
+          ),
           const SizedBox(height: 16),
           Container(
             key: const Key('local-notice'),
@@ -274,8 +297,9 @@ class _NewServerFormState extends State<_NewServerForm> {
                 Expanded(
                   child: Text(
                     'For this computer only. The server is named "localhost", federation is off and it only listens '
-                    'on this computer, so your phone can\'t connect to it. A Matrix server name can\'t be changed '
-                    'later; moving to your own domain will be a migration.',
+                    'on this computer. To use it from your phone, turn on "Allow access from other devices" in Settings '
+                    'and put it behind your HTTPS reverse proxy. A Matrix server name can\'t be changed later; moving to '
+                    'your own domain will be a migration.',
                     style: TextStyle(fontSize: 12.5, color: CC.text),
                   ),
                 ),
@@ -293,34 +317,24 @@ class _NewServerFormState extends State<_NewServerForm> {
           ),
           const SizedBox(height: 14),
           _label('PASSWORD'),
-          TextField(
-            key: const Key('local-password'),
-            controller: _pass,
-            enabled: !_busy,
-            obscureText: true,
-            autofillHints: const [AutofillHints.newPassword],
-          ),
+          TextField(key: const Key('local-password'), controller: _pass, enabled: !_busy, obscureText: true, autofillHints: const [AutofillHints.newPassword]),
           const SizedBox(height: 14),
           _label('CONFIRM PASSWORD'),
-          TextField(
-            key: const Key('local-confirm'),
-            controller: _confirm,
-            enabled: !_busy,
-            obscureText: true,
-            onSubmitted: (_) => _busy ? null : _submit(),
-          ),
+          TextField(key: const Key('local-confirm'), controller: _confirm, enabled: !_busy, obscureText: true, onSubmitted: (_) => _busy ? null : _submit()),
           if (error != null && !_busy) ...[
             const SizedBox(height: 12),
-            Text(error, key: const Key('local-error'), style: const TextStyle(color: CC.danger, fontSize: 13)),
+            Text(
+              error,
+              key: const Key('local-error'),
+              style: const TextStyle(color: CC.danger, fontSize: 13),
+            ),
           ],
           const SizedBox(height: 20),
           FilledButton(
             key: const Key('local-create'),
             style: FilledButton.styleFrom(backgroundColor: CC.accent, padding: const EdgeInsets.symmetric(vertical: 14)),
             onPressed: _busy ? null : _submit,
-            child: _busy
-                ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
-                : const Text('Create server'),
+            child: _busy ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)) : const Text('Create server'),
           ),
           if (_busy && progress != null) ...[
             const SizedBox(height: 12),
@@ -344,7 +358,10 @@ class _NewServerFormState extends State<_NewServerForm> {
 
   Widget _label(String t) => Padding(
     padding: const EdgeInsets.only(bottom: 6),
-    child: Text(t, style: const TextStyle(color: CC.textMuted, fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: 0.5)),
+    child: Text(
+      t,
+      style: const TextStyle(color: CC.textMuted, fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: 0.5),
+    ),
   );
 }
 

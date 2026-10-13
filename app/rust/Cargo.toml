@@ -19,3 +19,9 @@ serde_json.workspace = true
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(frb_expand)'] }
+
+# HTTPS on Android: reqwest (matrix-sdk) verifies certificates with
+# rustls-platform-verifier, which needs the app context (see src/android_tls.rs).
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "0.22"
+rustls-platform-verifier = "0.7"

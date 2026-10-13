@@ -146,9 +146,12 @@ flutter build apk --release --split-per-abi --target-platform android-arm64   # 
 adb install build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
 ```
 
+**Using the server on your Mac from the phone:** turn on Settings → *Allow access from other devices* on the Mac, put it behind your HTTPS reverse proxy, then on the phone choose *Use an existing Matrix server* with the proxy's URL and `@you:localhost`. Proxy snippets (Caddy, nginx, Nginx Proxy Manager): [docs/REMOTE_ACCESS.md](docs/REMOTE_ACCESS.md).
+
 Notes:
 - **Set `JAVA_HOME`** to your JDK directory, not `/usr`. Flutter puts `$JAVA_HOME/bin` first on Gradle's `PATH`. If that's `/usr/bin` and your distro ships an old `/usr/bin/rustc`, the NDK build picks up the wrong compiler.
 - **Signing.** Release builds are signed with the debug key, so they're fine for sideloading but not for the Play Store.
+- **HTTPS.** The Rust core checks certificates with Android's trust store (`rustls-platform-verifier`, initialized from `MainActivity`; its small Kotlin part comes from the project's Maven repo on GitHub and is kept by `proguard-rules.pro`).
 - **Persistent sync.** Enable it under Settings → Background sync. It shows an ongoing notification. On Android 13+ the app asks for notification permission.
 
 ### macOS (step by step)

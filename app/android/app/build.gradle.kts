@@ -34,6 +34,8 @@ android {
             // TODO: Add your own signing config for the release build.
             // Signing with the debug keys for now, so `flutter run --release` works.
             signingConfig = signingConfigs.getByName("debug")
+            // Keeps rustls-platform-verifier's Kotlin part (only called from Rust via JNI).
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }
 }
@@ -46,4 +48,26 @@ kotlin {
 
 flutter {
     source = "../.."
+}
+
+// rustls-platform-verifier (HTTPS certificate checks in the Rust core) has a
+// small Kotlin part, published as a Maven repo on GitHub. Its version must
+// match the `rustls-platform-verifier-android` crate in the repo's Cargo.lock.
+repositories {
+    maven {
+        url = uri("https://github.com/rustls/rustls-platform-verifier/raw/maven-archive/android-release-support/maven/")
+        content { includeGroup("org.rustls") }
+    }
+}
+
+val rustlsPlatformVerifierVersion: String = run {
+    val crate = "rustls-platform-verifier-android"
+    val lines = file("../../../Cargo.lock").readLines()
+    val idx = lines.indexOfFirst { it.trim() == "name = \"$crate\"" }
+    require(idx >= 0) { "$crate not found in Cargo.lock" }
+    lines.drop(idx + 1).first { it.trimStart().startsWith("version = ") }.substringAfter('"').substringBefore('"')
+}
+
+dependencies {
+    implementation("org.rustls:rustls-platform-verifier:$rustlsPlatformVerifierVersion")
 }

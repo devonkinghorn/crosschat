@@ -21,6 +21,8 @@ class MainActivity : FlutterActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        // Before Dart starts the Rust core: HTTPS certificate checks need the app context.
+        RustTls.ensure(this)
         // New-chat contact picker: READ_CONTACTS (asked once; the app works without it).
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "app.crosschat/contacts")
             .setMethodCallHandler { call, result ->

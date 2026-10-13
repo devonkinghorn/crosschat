@@ -13,13 +13,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 
-const desktop = PlatformCapabilities(
-  os: 'macos',
-  canExtractAppleHardwareKey: true,
-  hasPersistentSyncService: false,
-  hasEmbeddedWebview: true,
-  isMobile: false,
-);
+const desktop = PlatformCapabilities(os: 'macos', canExtractAppleHardwareKey: true, hasPersistentSyncService: false, hasEmbeddedWebview: true, isMobile: false);
 
 /// In-memory stand-in for crosschatd local mode.
 class FakeLocalServer implements LocalServerController {
@@ -65,6 +59,23 @@ class FakeLocalServer implements LocalServerController {
 
   @override
   Future<void> stop() async => calls.add('stop');
+
+  RemoteAccessStatus remote = const RemoteAccessStatus();
+
+  @override
+  Future<RemoteAccessStatus> remoteAccess() async => remote;
+
+  @override
+  Future<RemoteAccessStatus> setRemoteAccess({required bool enabled, String? publicUrl}) async {
+    calls.add('remote:$enabled:${publicUrl ?? ''}');
+    final url = (publicUrl ?? '').isEmpty ? null : publicUrl;
+    return remote = RemoteAccessStatus(
+      enabled: enabled,
+      publicUrl: url,
+      listening: enabled ? '0.0.0.0:8008' : null,
+      proxyTargets: enabled ? const ['http://192.168.1.20:8008', 'http://Devons-Mac.local:8008'] : const [],
+    );
+  }
 }
 
 /// Records which homeserver the app logged in to.
@@ -79,22 +90,12 @@ class RecordingBackend extends DemoBackend {
   }
 }
 
-Future<(AppState, RecordingBackend)> pump(
-  WidgetTester tester,
-  FakeLocalServer? local, {
-  PlatformCapabilities caps = desktop,
-  http.Client? daemon,
-}) async {
+Future<(AppState, RecordingBackend)> pump(WidgetTester tester, FakeLocalServer? local, {PlatformCapabilities caps = desktop, http.Client? daemon}) async {
   tester.view.physicalSize = const Size(1400, 1000);
   tester.view.devicePixelRatio = 1.0;
   addTearDown(tester.view.reset);
   final backend = RecordingBackend();
-  final state = AppState(
-    backend: backend,
-    capabilities: caps,
-    localServer: local,
-    daemonHttp: daemon ?? MockClient((_) async => http.Response('down', 503)),
-  );
+  final state = AppState(backend: backend, capabilities: caps, localServer: local, daemonHttp: daemon ?? MockClient((_) async => http.Response('down', 503)));
   await tester.pumpWidget(CrosschatApp(state: state));
   await state.init();
   await tester.pumpAndSettle();
@@ -128,7 +129,7 @@ void main() {
       await tester.tap(find.byKey(const Key('setup-local')));
       await tester.pumpAndSettle();
       expect(find.byKey(const Key('local-notice')), findsOneWidget);
-      expect(find.textContaining('phone can\'t connect'), findsOneWidget);
+      expect(find.textContaining('Allow access from other devices'), findsOneWidget);
       expect(find.textContaining('/home/devon/.local/share/crosschat/server'), findsOneWidget);
 
       await fillNewServer(tester, '@Devon', 'correct horse');
@@ -161,11 +162,35 @@ void main() {
       await tester.tap(find.byKey(const Key('open-settings')));
       await tester.pumpAndSettle();
       expect(find.byKey(const Key('local-server-info')), findsOneWidget);
-      expect(find.text('localhost · this computer only'), findsOneWidget);
+      expect(find.text('localhost · on this computer'), findsOneWidget);
       expect(find.byKey(const Key('daemon-url')), findsNothing);
+
+      // Allow access from other devices: shows where to point the proxy.
+      expect(find.byKey(const Key('remote-target-http://192.168.1.20:8008')), findsNothing);
+      await tester.tap(find.byKey(const Key('remote-access-switch')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('remote-target-http://192.168.1.20:8008')), findsOneWidget);
+      expect(find.byKey(const Key('remote-target-http://Devons-Mac.local:8008')), findsOneWidget);
+      expect(find.byKey(const Key('remote-awake-warning')), findsOneWidget);
+      await tester.enterText(find.byKey(const Key('remote-public-url')), 'https://matrix.example.com');
+      await tester.tap(find.byKey(const Key('remote-public-url-save')));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('homeserver https://matrix.example.com'), findsOneWidget);
+      expect(find.textContaining('username ${state.session!.userId}'), findsOneWidget);
+      await tester.tap(find.byKey(const Key('remote-access-switch')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('remote-target-http://192.168.1.20:8008')), findsNothing);
       await tester.tap(find.byKey(const Key('local-restart')));
       await tester.pumpAndSettle();
-      expect(local.calls, ['start', 'owner:devon', 'stop', 'start']);
+      expect(local.calls, [
+        'start',
+        'owner:devon',
+        'remote:true:',
+        'remote:true:https://matrix.example.com',
+        'remote:false:https://matrix.example.com',
+        'stop',
+        'start',
+      ]);
     });
 
     testWidgets('new server: validation errors never reach crosschatd', (tester) async {
@@ -331,10 +356,7 @@ void main() {
       expect(await srv.createOwner('devon', 'correct horse'), '@devon:localhost');
       expect(reqs.single.url.toString(), 'http://127.0.0.1:29300/_crosschat/v1/local/owner');
       expect(reqs.single.headers['Authorization'], 'Bearer ADMIN');
-      await expectLater(
-        srv.createOwner('taken', 'correct horse'),
-        throwsA(isA<LocalServerException>().having((e) => e.errcode, 'errcode', 'M_USER_IN_USE')),
-      );
+      await expectLater(srv.createOwner('taken', 'correct horse'), throwsA(isA<LocalServerException>().having((e) => e.errcode, 'errcode', 'M_USER_IN_USE')));
     });
 
     test('configuredOwner reads local.json', () async {
